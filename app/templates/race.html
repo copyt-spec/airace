@@ -1,0 +1,138 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>丸亀AI投資エンジン - {{ race_no }}R</title>
+
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            background-color: #f4f6f8;
+            margin: 40px;
+        }
+
+        h1 {
+            color: #1a1a1a;
+        }
+
+        table {
+            border-collapse: collapse;
+            width: 100%;
+            background: white;
+            box-shadow: 0 2px 8px rgba(0,0,0,0.1);
+        }
+
+        th {
+            background-color: #222;
+            color: white;
+            padding: 10px;
+            text-align: center;
+        }
+
+        td {
+            padding: 8px;
+            text-align: center;
+            border-bottom: 1px solid #ddd;
+        }
+
+        tr:hover {
+            background-color: #f1f1f1;
+        }
+
+        .positive {
+            color: green;
+            font-weight: bold;
+        }
+
+        .high-ev {
+            background-color: #fff3cd;
+        }
+
+        .no-bet {
+            margin-top: 20px;
+            font-size: 18px;
+            color: #777;
+        }
+
+        .container {
+            max-width: 1100px;
+            margin: auto;
+        }
+
+        .back-link {
+            margin-bottom: 20px;
+            display: inline-block;
+            text-decoration: none;
+            color: #007bff;
+        }
+
+        .footer {
+            margin-top: 30px;
+            font-size: 12px;
+            color: #888;
+        }
+    </style>
+</head>
+
+<body>
+
+<div class="container">
+
+    <a href="/" class="back-link">← レース一覧に戻る</a>
+
+    <h1>丸亀 {{ race_no }}R</h1>
+    <p>日付: {{ today }}</p>
+
+    {% if results and results|length > 0 %}
+
+        <table>
+            <thead>
+                <tr>
+                    <th>順位</th>
+                    <th>三連単</th>
+                    <th>確率</th>
+                    <th>オッズ</th>
+                    <th>期待値</th>
+                    <th>推奨投資額(円)</th>
+                </tr>
+            </thead>
+
+            <tbody>
+                {% for r in results %}
+                <tr class="{% if r.expected_value >= 1.2 %}high-ev{% endif %}">
+                    <td>{{ loop.index }}</td>
+                    <td>{{ r.combination }}</td>
+                    <td>{{ r.probability }}</td>
+                    <td>{{ r.odds }}</td>
+
+                    <td class="{% if r.expected_value >= 1 %}positive{% endif %}">
+                        {{ r.expected_value }}
+                    </td>
+
+                    <td>
+                        {{ r.bet_amount }}
+                    </td>
+                </tr>
+                {% endfor %}
+            </tbody>
+        </table>
+
+    {% else %}
+
+        <div class="no-bet">
+            このレースは期待値基準を満たす買い目がありません。
+        </div>
+
+    {% endif %}
+
+    <div class="footer">
+        <p>
+            ※ 本システムは期待値ベースの投資判断エンジンです。<br>
+            ※ 最終判断は自己責任でお願いします。
+        </p>
+    </div>
+
+</div>
+
+</body>
+</html>

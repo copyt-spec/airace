@@ -1,0 +1,258 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>BoatRace AI - Home</title>
+
+<style>
+:root{
+  --bg1:#071021;
+  --bg2:#0b1630;
+  --border: rgba(255,255,255,0.12);
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.70);
+  --shadow: 0 30px 90px rgba(0,0,0,0.55);
+  --radius: 22px;
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+  "Hiragino Sans","Noto Sans JP","Yu Gothic",Meiryo,sans-serif;
+  color:var(--text);
+  background:
+    radial-gradient(1000px 600px at 20% 10%, rgba(64,179,255,0.25), transparent 60%),
+    radial-gradient(800px 600px at 80% 20%, rgba(255,120,200,0.18), transparent 60%),
+    linear-gradient(180deg,var(--bg1),var(--bg2));
+  min-height:100vh;
+}
+
+.wrap{
+  width:min(1200px,94vw);
+  margin:0 auto;
+  padding:30px 0 80px;
+}
+
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  margin-bottom:20px;
+}
+
+.logo{
+  width:48px;height:48px;border-radius:16px;
+  background:linear-gradient(135deg,#40b3ff,#ff78c8);
+  box-shadow:0 10px 30px rgba(0,0,0,0.4);
+}
+
+.brand{
+  display:flex;align-items:center;gap:14px;
+}
+
+.brand h1{
+  margin:0;font-size:18px;font-weight:900;
+}
+.brand small{
+  display:block;font-size:12px;color:var(--muted);
+}
+
+.hero{
+  display:grid;
+  grid-template-columns: 1.2fr 0.8fr;
+  gap:28px;
+}
+
+.hero-left{
+  padding:30px;
+  border-radius:var(--radius);
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  box-shadow:var(--shadow);
+}
+
+.hero-title{
+  margin:0;
+  font-size:34px;
+  font-weight:900;
+  line-height:1.2;
+}
+
+.hero-sub{
+  margin:16px 0 0;
+  color:var(--muted);
+  font-size:15px;
+  line-height:1.7;
+}
+
+.controls{
+  margin-top:26px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  align-items:flex-end;
+}
+
+input[type="date"]{
+  padding:10px 14px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:rgba(0,0,0,0.25);
+  color:white;
+  font-weight:700;
+}
+
+.btn{
+  padding:12px 18px;
+  border:none;
+  border-radius:16px;
+  font-weight:900;
+  cursor:pointer;
+  transition:.1s;
+}
+
+.btn-primary{
+  background:linear-gradient(135deg,#40b3ff,#78ffb0);
+  color:#071021;
+}
+.btn-secondary{
+  background:linear-gradient(135deg,#ff78c8,#ffb978);
+  color:#071021;
+}
+.btn-tertiary{
+  background:linear-gradient(135deg,#9b8cff,#78d7ff);
+  color:#071021;
+}
+
+.btn:hover{filter:brightness(1.1);}
+
+.hero-right{
+  display:flex;
+  flex-direction:column;
+  gap:24px;
+}
+
+/* ===== 画像大型化 ===== */
+.img-card{
+  position:relative;
+  border-radius:var(--radius);
+  overflow:hidden;
+  border:1px solid var(--border);
+  box-shadow:var(--shadow);
+  height:320px;
+}
+
+.img{
+  position:absolute;
+  inset:0;
+  background-size:cover;
+  background-position:center;
+  filter:saturate(1.2) contrast(1.1);
+  transform:scale(1.03);
+}
+
+.img.boat{
+  background-image:
+    linear-gradient(180deg, rgba(5,10,25,0.25), rgba(5,10,25,0.55)),
+    url("/static/img/hero_boatrace.jpg");
+}
+
+.img.ai{
+  background-image:
+    linear-gradient(180deg, rgba(5,10,25,0.25), rgba(5,10,25,0.65)),
+    url("/static/img/ai_fusion.jpg");
+}
+
+/* モバイル */
+@media (max-width: 920px){
+  .hero{grid-template-columns:1fr;}
+  .img-card{height:280px;}
+}
+@media (max-width: 520px){
+  .hero-title{font-size:26px;}
+  .img-card{height:240px;}
+}
+
+.footer{
+  margin-top:30px;
+  text-align:center;
+  color:rgba(255,255,255,0.55);
+  font-size:12px;
+}
+</style>
+</head>
+
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>BOATRACE AI</h1>
+        <small>機械学習 × オッズ × 直前情報</small>
+      </div>
+    </div>
+  </div>
+
+  <section class="hero">
+    <div class="hero-left">
+      <h2 class="hero-title">期待値（EV%）で<br>買い目を最適化する。</h2>
+      <p class="hero-sub">
+        出走表を読み込み、オッズと直前情報を統合。
+        確率と回収率から3〜16点を自動選定。
+      </p>
+
+      <div class="controls">
+        <input id="dateInput" type="date">
+
+        <button class="btn btn-primary" id="goMarugame">丸亀へ</button>
+        <button class="btn btn-secondary" id="goToda">戸田へ</button>
+        <button class="btn btn-tertiary" id="goKojima">児島へ</button>
+      </div>
+    </div>
+
+    <div class="hero-right">
+      <div class="img-card">
+        <div class="img boat"></div>
+      </div>
+
+      <div class="img-card">
+        <div class="img ai"></div>
+      </div>
+    </div>
+  </section>
+
+  <div class="footer">
+    BoatRace AI Local System
+  </div>
+
+</div>
+
+<script>
+function formatYmd(date){
+  const y=date.getFullYear();
+  const m=String(date.getMonth()+1).padStart(2,"0");
+  const d=String(date.getDate()).padStart(2,"0");
+  return `${y}-${m}-${d}`;
+}
+function toYmdCompact(v){return v.replaceAll("-","");}
+
+const input=document.getElementById("dateInput");
+input.value=formatYmd(new Date());
+
+document.getElementById("goMarugame").onclick=()=>{
+  window.location.href="/marugame?date="+toYmdCompact(input.value);
+};
+document.getElementById("goToda").onclick=()=>{
+  window.location.href="/toda?date="+toYmdCompact(input.value);
+};
+document.getElementById("goKojima").onclick=()=>{
+  window.location.href="/kojima?date="+toYmdCompact(input.value);
+};
+</script>
+
+</body>
+</html>
