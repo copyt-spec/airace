@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -10,13 +11,9 @@ from flask import Flask, render_template, request
 
 try:
     from app.controller import RaceController
-except Exception as e1:
-    print("[IMPORT_ERROR] from app.controller import RaceController failed:", e1)
-    try:
-        from controller import RaceController  # type: ignore
-    except Exception as e2:
-        print("[IMPORT_ERROR] from controller import RaceController failed:", e2)
-        RaceController = None  # type: ignore
+except Exception as e:
+    print("[IMPORT_ERROR] from app.controller import RaceController failed:", e)
+    RaceController = None  # type: ignore
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
@@ -204,7 +201,6 @@ def _render_venue_page(venue_name: str):
         return "RaceController import failed. Check app/controller.py", 500
 
     controller = RaceController()
-    _ = VENUE_CODE_MAP.get(venue_name, 0)
 
     grouped_odds = None
     probabilities: Dict[str, float] = {}
@@ -370,11 +366,6 @@ def toda():
 def kojima():
     return _render_venue_page("児島")
 
-
-if __name__ == "__main__":
-    app.run(debug=True)
-
-import os
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
