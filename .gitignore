@@ -1,9 +1,18 @@
+# Python
 __pycache__/
 *.pyc
-venv/
-.env/
+*.pyo
+
+# 環境
+.env
+
+# ===== データ（超重要）=====
+data/datasets/*.csv
+
+# ===== モデル（超重要）=====
+data/models/*.joblib
+data/models/*.pkl
+data/models/*.json
+
+# Mac
 .DS_Store
-.vscode/
-.idea/
-*.log
-data/
