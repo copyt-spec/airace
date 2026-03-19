@@ -24,7 +24,7 @@ def _load_json(path: Path):
 
 
 class RenderAIPredictor:
-    def __init__(self):
+    def __init__(self, debug: bool = False):
         if not MODEL_PATH.exists():
             raise FileNotFoundError(f"Missing model: {MODEL_PATH}")
         if not META_PATH.exists():
@@ -39,20 +39,61 @@ class RenderAIPredictor:
         self.model_classes = np.array(self.model.classes_)
         self.class_to_col = {int(cls): i for i, cls in enumerate(self.model_classes)}
         self.combo_to_class = {combo: idx for idx, combo in enumerate(self.labels)}
+        self.debug = debug
+
+    def _debug_print_feature_snapshot(self, df: pd.DataFrame) -> None:
+        watch_cols = [
+            "combo",
+            "first_win_rate", "second_win_rate", "third_win_rate",
+            "first_place_rate", "second_place_rate", "third_place_rate",
+            "first_exhibit", "second_exhibit", "third_exhibit",
+            "first_st", "second_st", "third_st",
+            "first_course", "second_course", "third_course",
+            "first_grade", "second_grade", "third_grade",
+            "f_s_win_rate_diff", "f_t_win_rate_diff", "s_t_win_rate_diff",
+            "f_s_exhibit_diff", "f_t_exhibit_diff", "s_t_exhibit_diff",
+            "f_s_st_diff", "f_t_st_diff", "s_t_st_diff",
+        ]
+        cols = [c for c in watch_cols if c in df.columns]
+        if not cols:
+            print("[AI-DEBUG] no snapshot columns found")
+            return
+
+        print("[AI-DEBUG] raw feature snapshot:")
+        print(df[cols].head(10).to_string(index=False))
 
     def _sanitize_features(self, df: pd.DataFrame) -> pd.DataFrame:
-        out = df.copy()
+        base = df.copy()
 
-        for col in self.feature_cols:
-            if col not in out.columns:
-                out[col] = 0.0
+        missing_cols = [col for col in self.feature_cols if col not in base.columns]
+        extra_cols = [col for col in base.columns if col not in self.feature_cols and col != "combo"]
 
-        out = out[self.feature_cols].copy()
+        if self.debug:
+            print(f"[AI-DEBUG] source feature df shape: {base.shape}")
+            print(f"[AI-DEBUG] missing feature cols: {len(missing_cols)}")
+            if missing_cols:
+                print("[AI-DEBUG] sample missing:", missing_cols[:50])
+            print(f"[AI-DEBUG] extra cols not used: {len(extra_cols)}")
+            if extra_cols:
+                print("[AI-DEBUG] sample extra:", extra_cols[:30])
+
+        # DataFrame fragmentation回避
+        if missing_cols:
+            add_df = pd.DataFrame(0.0, index=base.index, columns=missing_cols)
+            base = pd.concat([base, add_df], axis=1)
+
+        out = base[self.feature_cols].copy()
 
         for col in out.columns:
             out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
         out = out.replace([np.inf, -np.inf], 0.0)
+
+        if self.debug:
+            print(f"[AI-DEBUG] sanitized feature df shape: {out.shape}")
+            nonzero_ratio = (out != 0).mean().mean() if len(out) > 0 else 0.0
+            print(f"[AI-DEBUG] approx nonzero ratio: {nonzero_ratio:.4f}")
+
         return out
 
     def predict_race(
@@ -81,6 +122,10 @@ class RenderAIPredictor:
         )
 
         df = pd.DataFrame(rows)
+
+        if self.debug:
+            self._debug_print_feature_snapshot(df)
+
         x = self._sanitize_features(df)
         proba = self.model.predict_proba(x)
 
@@ -118,5 +163,10 @@ class RenderAIPredictor:
             result.sort(key=lambda x: (x["ev"] if x["ev"] is not None else -1), reverse=True)
         else:
             result.sort(key=lambda x: x["score"], reverse=True)
+
+        if self.debug:
+            print("[AI-DEBUG] prediction top10:")
+            for row in result[:10]:
+                print(row)
 
         return result[:top_n]

@@ -50,7 +50,10 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
     if v is None:
         return default
     try:
-        x = float(v)
+        s = str(v).strip()
+        if s == "":
+            return default
+        x = float(s)
         if math.isfinite(x):
             return x
         return default
@@ -61,11 +64,12 @@ def _safe_float(v: Any, default: float = 0.0) -> float:
 def _safe_str(v: Any, default: str = "") -> str:
     if v is None:
         return default
-    return str(v).strip()
+    s = str(v).strip()
+    return s if s else default
 
 
 def _encode_grade(v: Any) -> int:
-    return GRADE_CODE.get(_safe_str(v), 0)
+    return GRADE_CODE.get(_safe_str(v).upper(), 0)
 
 
 def _encode_weather(v: Any) -> int:
@@ -103,6 +107,10 @@ def _std(vals: List[float]) -> float:
     return (sum((x - m) ** 2 for x in vals) / len(vals)) ** 0.5
 
 
+def _course_key(lane: int, suffix: str) -> str:
+    return f"racer_course{lane}_{suffix}"
+
+
 def build_120_features_for_race(
     *,
     date: str,
@@ -114,13 +122,6 @@ def build_120_features_for_race(
     wind_speed_mps: float = 0.0,
     wave_cm: float = 0.0,
 ) -> List[Dict[str, Any]]:
-    """
-    entries は6艇分の辞書配列を想定。
-    各dictに最低限ほしいキー例:
-      lane, racer_no, motor, boat, exhibit, st,
-      win_rate, place_rate, age, weight, grade, course
-    """
-
     if len(entries) != 6:
         raise ValueError("entries must contain exactly 6 boats.")
 
@@ -130,110 +131,132 @@ def build_120_features_for_race(
         lane = int(row["lane"])
         lane_info[lane] = {
             "lane": float(lane),
-            "racer_no": _safe_float(row.get("racer_no", 0)),
-            "motor": _safe_float(row.get("motor", 0)),
-            "boat": _safe_float(row.get("boat", 0)),
-            "exhibit": _safe_float(row.get("exhibit", 0)),
-            "st": _safe_float(row.get("st", 0)),
-            "course": _safe_float(row.get("course", lane)),
-            "win_rate": _safe_float(row.get("win_rate", 0)),
-            "place_rate": _safe_float(row.get("place_rate", 0)),
-            "age": _safe_float(row.get("age", 0)),
-            "weight": _safe_float(row.get("weight", 0)),
-            "grade_code": float(_encode_grade(row.get("grade", ""))),
+            "course": _safe_float(row.get("course", lane), float(lane)),
+            "win_rate": _safe_float(row.get("win_rate", 0.0), 0.0),
+            "place_rate": _safe_float(row.get("place_rate", 0.0), 0.0),
+            "exhibit": _safe_float(row.get("exhibit", 0.0), 0.0),
+            "st": _safe_float(
+                row.get("start_timing", row.get("st", row.get("avg_st", 0.0))),
+                0.0,
+            ),
+            "avg_st": _safe_float(row.get("avg_st", 0.0), 0.0),
+            "grade": float(_encode_grade(row.get("grade", ""))),
+            "motor": _safe_float(row.get("motor", 0.0), 0.0),
+            "boat": _safe_float(row.get("boat", 0.0), 0.0),
+            "age": _safe_float(row.get("age", 0.0), 0.0),
+            "weight": _safe_float(row.get("weight", 0.0), 0.0),
+            "ability_index": _safe_float(row.get("ability_index", 0.0), 0.0),
+            "prev_ability_index": _safe_float(row.get("prev_ability_index", 0.0), 0.0),
+
+            # 自コース適性
+            "self_course_entry_count": _safe_float(row.get(_course_key(lane, "entry_count"), 0.0), 0.0),
+            "self_course_place_rate": _safe_float(row.get(_course_key(lane, "place_rate"), 0.0), 0.0),
+            "self_course_avg_st": _safe_float(row.get(_course_key(lane, "avg_st"), 0.0), 0.0),
+
+            # 1〜6コース全部持つ
+            "course1_entry_count": _safe_float(row.get("racer_course1_entry_count", 0.0), 0.0),
+            "course1_place_rate": _safe_float(row.get("racer_course1_place_rate", 0.0), 0.0),
+            "course1_avg_st": _safe_float(row.get("racer_course1_avg_st", 0.0), 0.0),
+
+            "course2_entry_count": _safe_float(row.get("racer_course2_entry_count", 0.0), 0.0),
+            "course2_place_rate": _safe_float(row.get("racer_course2_place_rate", 0.0), 0.0),
+            "course2_avg_st": _safe_float(row.get("racer_course2_avg_st", 0.0), 0.0),
+
+            "course3_entry_count": _safe_float(row.get("racer_course3_entry_count", 0.0), 0.0),
+            "course3_place_rate": _safe_float(row.get("racer_course3_place_rate", 0.0), 0.0),
+            "course3_avg_st": _safe_float(row.get("racer_course3_avg_st", 0.0), 0.0),
+
+            "course4_entry_count": _safe_float(row.get("racer_course4_entry_count", 0.0), 0.0),
+            "course4_place_rate": _safe_float(row.get("racer_course4_place_rate", 0.0), 0.0),
+            "course4_avg_st": _safe_float(row.get("racer_course4_avg_st", 0.0), 0.0),
+
+            "course5_entry_count": _safe_float(row.get("racer_course5_entry_count", 0.0), 0.0),
+            "course5_place_rate": _safe_float(row.get("racer_course5_place_rate", 0.0), 0.0),
+            "course5_avg_st": _safe_float(row.get("racer_course5_avg_st", 0.0), 0.0),
+
+            "course6_entry_count": _safe_float(row.get("racer_course6_entry_count", 0.0), 0.0),
+            "course6_place_rate": _safe_float(row.get("racer_course6_place_rate", 0.0), 0.0),
+            "course6_avg_st": _safe_float(row.get("racer_course6_avg_st", 0.0), 0.0),
         }
 
-    win_rates = {lane: lane_info[lane]["win_rate"] for lane in LANES}
-    place_rates = {lane: lane_info[lane]["place_rate"] for lane in LANES}
-    exhibits = {lane: lane_info[lane]["exhibit"] for lane in LANES}
-    sts = {lane: lane_info[lane]["st"] for lane in LANES}
-    grade_codes = {lane: lane_info[lane]["grade_code"] for lane in LANES}
+    win_rates = {i: lane_info[i]["win_rate"] for i in LANES}
+    place_rates = {i: lane_info[i]["place_rate"] for i in LANES}
+    exhibits = {i: lane_info[i]["exhibit"] for i in LANES}
+    sts = {i: lane_info[i]["st"] for i in LANES}
+    grades = {i: lane_info[i]["grade"] for i in LANES}
+    abilities = {i: lane_info[i]["ability_index"] for i in LANES}
+    prev_abilities = {i: lane_info[i]["prev_ability_index"] for i in LANES}
+    self_course_rates = {i: lane_info[i]["self_course_place_rate"] for i in LANES}
+    self_course_sts = {i: lane_info[i]["self_course_avg_st"] for i in LANES}
 
-    win_rate_rank = _rank_desc(win_rates)
-    place_rate_rank = _rank_desc(place_rates)
+    win_rank = _rank_desc(win_rates)
+    place_rank = _rank_desc(place_rates)
     exhibit_rank = _rank_asc(exhibits)
     st_rank = _rank_asc(sts)
-    grade_rank = _rank_desc(grade_codes)
-
-    lane1 = lane_info[1]
+    grade_rank = _rank_desc(grades)
+    ability_rank = _rank_desc(abilities)
+    prev_ability_rank = _rank_desc(prev_abilities)
+    self_course_rate_rank = _rank_desc(self_course_rates)
+    self_course_st_rank = _rank_asc(self_course_sts)
 
     race_feat: Dict[str, float] = {
         "weather_code": float(_encode_weather(weather)),
         "wind_dir_code": float(_encode_wind_dir(wind_dir)),
-        "wind_speed_mps": _safe_float(wind_speed_mps),
-        "wave_cm": _safe_float(wave_cm),
+        "wind_speed_mps": _safe_float(wind_speed_mps, 0.0),
+        "wave_cm": _safe_float(wave_cm, 0.0),
         "venue_code": float(_encode_venue(venue)),
     }
 
-    all_win = [lane_info[l]["win_rate"] for l in LANES]
-    all_place = [lane_info[l]["place_rate"] for l in LANES]
-    all_ex = [lane_info[l]["exhibit"] for l in LANES]
-    all_st = [lane_info[l]["st"] for l in LANES]
+    race_summary_keys = [
+        "win_rate", "place_rate", "exhibit", "st", "avg_st",
+        "grade", "course", "age", "weight",
+        "ability_index", "prev_ability_index",
+        "self_course_entry_count", "self_course_place_rate", "self_course_avg_st",
+    ]
+    for key in race_summary_keys:
+        vals = [lane_info[i][key] for i in LANES]
+        race_feat[f"race_{key}_mean"] = _mean(vals)
+        race_feat[f"race_{key}_std"] = _std(vals)
 
-    race_feat["race_win_rate_mean"] = _mean(all_win)
-    race_feat["race_win_rate_std"] = _std(all_win)
-    race_feat["race_place_rate_mean"] = _mean(all_place)
-    race_feat["race_place_rate_std"] = _std(all_place)
-    race_feat["race_exhibit_mean"] = _mean(all_ex)
-    race_feat["race_exhibit_std"] = _std(all_ex)
-    race_feat["race_st_mean"] = _mean(all_st)
-    race_feat["race_st_std"] = _std(all_st)
+    race_feat["inside_exhibit_mean"] = _mean([lane_info[i]["exhibit"] for i in [1, 2, 3]])
+    race_feat["outside_exhibit_mean"] = _mean([lane_info[i]["exhibit"] for i in [4, 5, 6]])
+    race_feat["inside_st_mean"] = _mean([lane_info[i]["st"] for i in [1, 2, 3]])
+    race_feat["outside_st_mean"] = _mean([lane_info[i]["st"] for i in [4, 5, 6]])
+    race_feat["inside_ability_mean"] = _mean([lane_info[i]["ability_index"] for i in [1, 2, 3]])
+    race_feat["outside_ability_mean"] = _mean([lane_info[i]["ability_index"] for i in [4, 5, 6]])
 
-    race_feat["inside_win_rate_sum"] = sum(lane_info[l]["win_rate"] for l in [1, 2, 3])
-    race_feat["outside_win_rate_sum"] = sum(lane_info[l]["win_rate"] for l in [4, 5, 6])
-    race_feat["inside_place_rate_sum"] = sum(lane_info[l]["place_rate"] for l in [1, 2, 3])
-    race_feat["outside_place_rate_sum"] = sum(lane_info[l]["place_rate"] for l in [4, 5, 6])
+    race_feat["course_move_abs_sum"] = sum(abs(lane_info[i]["course"] - i) for i in LANES)
+    race_feat["course_move_abs_mean"] = race_feat["course_move_abs_sum"] / 6.0
 
-    race_feat["inside_exhibit_mean"] = _mean([lane_info[l]["exhibit"] for l in [1, 2, 3]])
-    race_feat["outside_exhibit_mean"] = _mean([lane_info[l]["exhibit"] for l in [4, 5, 6]])
-    race_feat["inside_st_mean"] = _mean([lane_info[l]["st"] for l in [1, 2, 3]])
-    race_feat["outside_st_mean"] = _mean([lane_info[l]["st"] for l in [4, 5, 6]])
+    for i in LANES:
+        race_feat[f"rank_win_rate_lane{i}"] = float(win_rank[i])
+        race_feat[f"rank_place_rate_lane{i}"] = float(place_rank[i])
+        race_feat[f"rank_exhibit_lane{i}"] = float(exhibit_rank[i])
+        race_feat[f"rank_st_lane{i}"] = float(st_rank[i])
+        race_feat[f"rank_grade_lane{i}"] = float(grade_rank[i])
+        race_feat[f"rank_ability_lane{i}"] = float(ability_rank[i])
+        race_feat[f"rank_prev_ability_lane{i}"] = float(prev_ability_rank[i])
+        race_feat[f"rank_self_course_place_rate_lane{i}"] = float(self_course_rate_rank[i])
+        race_feat[f"rank_self_course_avg_st_lane{i}"] = float(self_course_st_rank[i])
 
-    race_feat["inner_advantage_win"] = race_feat["inside_win_rate_sum"] - race_feat["outside_win_rate_sum"]
-    race_feat["inner_advantage_place"] = race_feat["inside_place_rate_sum"] - race_feat["outside_place_rate_sum"]
-    race_feat["inner_advantage_exhibit"] = race_feat["outside_exhibit_mean"] - race_feat["inside_exhibit_mean"]
-    race_feat["inner_advantage_st"] = race_feat["outside_st_mean"] - race_feat["inside_st_mean"]
+        rel_keys = [
+            "win_rate", "place_rate", "exhibit", "st", "avg_st",
+            "grade", "course", "age", "weight",
+            "ability_index", "prev_ability_index",
+            "self_course_entry_count", "self_course_place_rate", "self_course_avg_st",
+        ]
+        for key in rel_keys:
+            race_feat[f"rel_{key}_lane{i}"] = lane_info[i][key] - race_feat[f"race_{key}_mean"]
 
-    for lane in LANES:
-        li = lane_info[lane]
-        race_feat[f"lane{lane}_win_rate"] = li["win_rate"]
-        race_feat[f"lane{lane}_place_rate"] = li["place_rate"]
-        race_feat[f"lane{lane}_exhibit"] = li["exhibit"]
-        race_feat[f"lane{lane}_st"] = li["st"]
-        race_feat[f"lane{lane}_motor"] = li["motor"]
-        race_feat[f"lane{lane}_boat"] = li["boat"]
-        race_feat[f"lane{lane}_age"] = li["age"]
-        race_feat[f"lane{lane}_weight"] = li["weight"]
-        race_feat[f"lane{lane}_grade_code"] = li["grade_code"]
-        race_feat[f"lane{lane}_course"] = li["course"]
-        race_feat[f"lane{lane}_racer_no"] = li["racer_no"]
-
-        race_feat[f"lane{lane}_win_rate_rank"] = float(win_rate_rank[lane])
-        race_feat[f"lane{lane}_place_rate_rank"] = float(place_rate_rank[lane])
-        race_feat[f"lane{lane}_exhibit_rank"] = float(exhibit_rank[lane])
-        race_feat[f"lane{lane}_st_rank"] = float(st_rank[lane])
-        race_feat[f"lane{lane}_grade_rank"] = float(grade_rank[lane])
-
-        race_feat[f"lane{lane}_win_rate_diff_from_lane1"] = li["win_rate"] - lane1["win_rate"]
-        race_feat[f"lane{lane}_place_rate_diff_from_lane1"] = li["place_rate"] - lane1["place_rate"]
-        race_feat[f"lane{lane}_exhibit_diff_from_lane1"] = li["exhibit"] - lane1["exhibit"]
-        race_feat[f"lane{lane}_st_diff_from_lane1"] = li["st"] - lane1["st"]
-        race_feat[f"lane{lane}_grade_diff_from_lane1"] = li["grade_code"] - lane1["grade_code"]
-
-        race_feat[f"lane{lane}_win_rate_rel"] = li["win_rate"] - race_feat["race_win_rate_mean"]
-        race_feat[f"lane{lane}_place_rate_rel"] = li["place_rate"] - race_feat["race_place_rate_mean"]
-        race_feat[f"lane{lane}_exhibit_rel"] = li["exhibit"] - race_feat["race_exhibit_mean"]
-        race_feat[f"lane{lane}_st_rel"] = li["st"] - race_feat["race_st_mean"]
-
-    out_rows: List[Dict[str, Any]] = []
+    rows: List[Dict[str, Any]] = []
 
     for combo in ALL_COMBOS:
         a, b, c = map(int, combo.split("-"))
-        first = lane_info[a]
-        second = lane_info[b]
-        third = lane_info[c]
+        f = lane_info[a]
+        s = lane_info[b]
+        t = lane_info[c]
 
-        row: Dict[str, Any] = {
+        out: Dict[str, Any] = {
             "race_key": f"{date}_{venue}_{race_no}",
             "date": date,
             "venue": venue,
@@ -241,97 +264,136 @@ def build_120_features_for_race(
             "combo": combo,
         }
 
-        row.update(race_feat)
+        out.update(race_feat)
 
-        row["first_lane"] = float(a)
-        row["second_lane"] = float(b)
-        row["third_lane"] = float(c)
+        def add_triplet(prefix: str, boat: Dict[str, float], lane: int) -> None:
+            base_keys = [
+                "course", "win_rate", "place_rate", "exhibit", "st", "avg_st",
+                "grade", "motor", "boat", "age", "weight",
+                "ability_index", "prev_ability_index",
+                "self_course_entry_count", "self_course_place_rate", "self_course_avg_st",
+                "course1_entry_count", "course1_place_rate", "course1_avg_st",
+                "course2_entry_count", "course2_place_rate", "course2_avg_st",
+                "course3_entry_count", "course3_place_rate", "course3_avg_st",
+                "course4_entry_count", "course4_place_rate", "course4_avg_st",
+                "course5_entry_count", "course5_place_rate", "course5_avg_st",
+                "course6_entry_count", "course6_place_rate", "course6_avg_st",
+            ]
+            for key in base_keys:
+                out[f"{prefix}_{key}"] = boat[key]
 
-        row["is_head_inside"] = 1.0 if a in [1, 2] else 0.0
-        row["is_head_outer"] = 1.0 if a in [5, 6] else 0.0
-        row["has_lane1"] = 1.0 if 1 in [a, b, c] else 0.0
-        row["has_lane2"] = 1.0 if 2 in [a, b, c] else 0.0
-        row["has_lane3"] = 1.0 if 3 in [a, b, c] else 0.0
-        row["has_lane4"] = 1.0 if 4 in [a, b, c] else 0.0
-        row["has_lane5"] = 1.0 if 5 in [a, b, c] else 0.0
-        row["has_lane6"] = 1.0 if 6 in [a, b, c] else 0.0
+            out[f"{prefix}_win_rate_rank"] = race_feat[f"rank_win_rate_lane{lane}"]
+            out[f"{prefix}_place_rate_rank"] = race_feat[f"rank_place_rate_lane{lane}"]
+            out[f"{prefix}_exhibit_rank"] = race_feat[f"rank_exhibit_lane{lane}"]
+            out[f"{prefix}_st_rank"] = race_feat[f"rank_st_lane{lane}"]
+            out[f"{prefix}_grade_rank"] = race_feat[f"rank_grade_lane{lane}"]
+            out[f"{prefix}_ability_rank"] = race_feat[f"rank_ability_lane{lane}"]
+            out[f"{prefix}_prev_ability_rank"] = race_feat[f"rank_prev_ability_lane{lane}"]
+            out[f"{prefix}_self_course_place_rate_rank"] = race_feat[f"rank_self_course_place_rate_lane{lane}"]
+            out[f"{prefix}_self_course_avg_st_rank"] = race_feat[f"rank_self_course_avg_st_lane{lane}"]
 
-        row["first_minus_second_lane"] = float(a - b)
-        row["first_minus_third_lane"] = float(a - c)
-        row["second_minus_third_lane"] = float(b - c)
+            rel_keys = [
+                "win_rate", "place_rate", "exhibit", "st", "avg_st",
+                "grade", "course", "age", "weight",
+                "ability_index", "prev_ability_index",
+                "self_course_entry_count", "self_course_place_rate", "self_course_avg_st",
+            ]
+            for key in rel_keys:
+                out[f"{prefix}_{key}_rel"] = race_feat[f"rel_{key}_lane{lane}"]
 
-        for prefix, src in [("first", first), ("second", second), ("third", third)]:
-            lane = int(src["lane"])
+        add_triplet("first", f, a)
+        add_triplet("second", s, b)
+        add_triplet("third", t, c)
 
-            row[f"{prefix}_win_rate"] = src["win_rate"]
-            row[f"{prefix}_place_rate"] = src["place_rate"]
-            row[f"{prefix}_exhibit"] = src["exhibit"]
-            row[f"{prefix}_st"] = src["st"]
-            row[f"{prefix}_motor"] = src["motor"]
-            row[f"{prefix}_boat"] = src["boat"]
-            row[f"{prefix}_age"] = src["age"]
-            row[f"{prefix}_weight"] = src["weight"]
-            row[f"{prefix}_grade_code"] = src["grade_code"]
-            row[f"{prefix}_course"] = src["course"]
-            row[f"{prefix}_racer_no"] = src["racer_no"]
+        summary_keys = [
+            "win_rate", "place_rate", "exhibit", "st", "avg_st", "grade", "course",
+            "age", "weight", "ability_index", "prev_ability_index",
+            "self_course_entry_count", "self_course_place_rate", "self_course_avg_st",
+        ]
+        for key in summary_keys:
+            vals = [f[key], s[key], t[key]]
+            out[f"top3_{key}_sum"] = sum(vals)
+            out[f"top3_{key}_mean"] = _mean(vals)
+            out[f"top3_{key}_std"] = _std(vals)
 
-            row[f"{prefix}_win_rate_rank"] = race_feat[f"lane{lane}_win_rate_rank"]
-            row[f"{prefix}_place_rate_rank"] = race_feat[f"lane{lane}_place_rate_rank"]
-            row[f"{prefix}_exhibit_rank"] = race_feat[f"lane{lane}_exhibit_rank"]
-            row[f"{prefix}_st_rank"] = race_feat[f"lane{lane}_st_rank"]
-            row[f"{prefix}_grade_rank"] = race_feat[f"lane{lane}_grade_rank"]
+        def add_diff(prefix: str, x: Dict[str, float], y: Dict[str, float]) -> None:
+            diff_keys = [
+                "win_rate", "place_rate", "exhibit", "st", "avg_st", "grade", "course",
+                "age", "weight", "ability_index", "prev_ability_index",
+                "self_course_entry_count", "self_course_place_rate", "self_course_avg_st",
+            ]
+            for k in diff_keys:
+                out[f"{prefix}_{k}_diff"] = x[k] - y[k]
 
-            row[f"{prefix}_win_rate_diff_from_lane1"] = race_feat[f"lane{lane}_win_rate_diff_from_lane1"]
-            row[f"{prefix}_place_rate_diff_from_lane1"] = race_feat[f"lane{lane}_place_rate_diff_from_lane1"]
-            row[f"{prefix}_exhibit_diff_from_lane1"] = race_feat[f"lane{lane}_exhibit_diff_from_lane1"]
-            row[f"{prefix}_st_diff_from_lane1"] = race_feat[f"lane{lane}_st_diff_from_lane1"]
-            row[f"{prefix}_grade_diff_from_lane1"] = race_feat[f"lane{lane}_grade_diff_from_lane1"]
+        add_diff("f_s", f, s)
+        add_diff("f_t", f, t)
+        add_diff("s_t", s, t)
 
-            row[f"{prefix}_win_rate_rel"] = race_feat[f"lane{lane}_win_rate_rel"]
-            row[f"{prefix}_place_rate_rel"] = race_feat[f"lane{lane}_place_rate_rel"]
-            row[f"{prefix}_exhibit_rel"] = race_feat[f"lane{lane}_exhibit_rel"]
-            row[f"{prefix}_st_rel"] = race_feat[f"lane{lane}_st_rel"]
+        field_vs_keys = [
+            "win_rate", "place_rate", "exhibit", "st", "avg_st",
+            "grade", "ability_index", "prev_ability_index",
+            "self_course_place_rate", "self_course_avg_st",
+        ]
+        for key in field_vs_keys:
+            field_avg = race_feat[f"race_{key}_mean"]
+            out[f"f_{key}_vs_field"] = f[key] - field_avg
+            out[f"s_{key}_vs_field"] = s[key] - field_avg
+            out[f"t_{key}_vs_field"] = t[key] - field_avg
 
-        row["top3_win_rate_sum"] = first["win_rate"] + second["win_rate"] + third["win_rate"]
-        row["top3_place_rate_sum"] = first["place_rate"] + second["place_rate"] + third["place_rate"]
-        row["top3_grade_sum"] = first["grade_code"] + second["grade_code"] + third["grade_code"]
+        out["f_stronger_than_s"] = int(f["win_rate"] > s["win_rate"])
+        out["f_stronger_than_t"] = int(f["win_rate"] > t["win_rate"])
+        out["s_stronger_than_t"] = int(s["win_rate"] > t["win_rate"])
 
-        row["top3_win_rate_mean"] = _mean([first["win_rate"], second["win_rate"], third["win_rate"]])
-        row["top3_place_rate_mean"] = _mean([first["place_rate"], second["place_rate"], third["place_rate"]])
-        row["top3_exhibit_mean"] = _mean([first["exhibit"], second["exhibit"], third["exhibit"]])
-        row["top3_st_mean"] = _mean([first["st"], second["st"], third["st"]])
+        out["f_higher_ability_than_s"] = int(f["ability_index"] > s["ability_index"])
+        out["f_higher_ability_than_t"] = int(f["ability_index"] > t["ability_index"])
+        out["s_higher_ability_than_t"] = int(s["ability_index"] > t["ability_index"])
 
-        row["top3_win_rate_std"] = _std([first["win_rate"], second["win_rate"], third["win_rate"]])
-        row["top3_place_rate_std"] = _std([first["place_rate"], second["place_rate"], third["place_rate"]])
-        row["top3_exhibit_std"] = _std([first["exhibit"], second["exhibit"], third["exhibit"]])
-        row["top3_st_std"] = _std([first["st"], second["st"], third["st"]])
+        out["f_better_self_course_than_s"] = int(f["self_course_place_rate"] > s["self_course_place_rate"])
+        out["f_better_self_course_than_t"] = int(f["self_course_place_rate"] > t["self_course_place_rate"])
+        out["s_better_self_course_than_t"] = int(s["self_course_place_rate"] > t["self_course_place_rate"])
 
-        row["first_second_win_rate_diff"] = first["win_rate"] - second["win_rate"]
-        row["first_third_win_rate_diff"] = first["win_rate"] - third["win_rate"]
-        row["second_third_win_rate_diff"] = second["win_rate"] - third["win_rate"]
+        out["f_fastest_st"] = int(f["st"] < s["st"] and f["st"] < t["st"])
+        out["s_fastest_st"] = int(s["st"] < f["st"] and s["st"] < t["st"])
+        out["t_fastest_st"] = int(t["st"] < f["st"] and t["st"] < s["st"])
 
-        row["first_second_place_rate_diff"] = first["place_rate"] - second["place_rate"]
-        row["first_third_place_rate_diff"] = first["place_rate"] - third["place_rate"]
-        row["second_third_place_rate_diff"] = second["place_rate"] - third["place_rate"]
+        out["f_best_exhibit"] = int(f["exhibit"] < s["exhibit"] and f["exhibit"] < t["exhibit"])
+        out["s_best_exhibit"] = int(s["exhibit"] < f["exhibit"] and s["exhibit"] < t["exhibit"])
+        out["t_best_exhibit"] = int(t["exhibit"] < f["exhibit"] and t["exhibit"] < s["exhibit"])
 
-        row["first_second_exhibit_diff"] = first["exhibit"] - second["exhibit"]
-        row["first_third_exhibit_diff"] = first["exhibit"] - third["exhibit"]
-        row["second_third_exhibit_diff"] = second["exhibit"] - third["exhibit"]
+        out["course_move_abs_sum_top3"] = (
+            abs(f["course"] - a) +
+            abs(s["course"] - b) +
+            abs(t["course"] - c)
+        )
 
-        row["first_second_st_diff"] = first["st"] - second["st"]
-        row["first_third_st_diff"] = first["st"] - third["st"]
-        row["second_third_st_diff"] = second["st"] - third["st"]
+        # 進入コースではなく「その艇が今回の枠でどれくらい得意か」
+        out["first_lane_fit_place_rate"] = f[f"course{a}_place_rate"]
+        out["second_lane_fit_place_rate"] = s[f"course{b}_place_rate"]
+        out["third_lane_fit_place_rate"] = t[f"course{c}_place_rate"]
 
-        row["head_inner_advantage_win"] = first["win_rate"] - race_feat["race_win_rate_mean"]
-        row["head_inner_advantage_place"] = first["place_rate"] - race_feat["race_place_rate_mean"]
-        row["head_inner_advantage_exhibit"] = race_feat["race_exhibit_mean"] - first["exhibit"]
-        row["head_inner_advantage_st"] = race_feat["race_st_mean"] - first["st"]
+        out["first_lane_fit_avg_st"] = f[f"course{a}_avg_st"]
+        out["second_lane_fit_avg_st"] = s[f"course{b}_avg_st"]
+        out["third_lane_fit_avg_st"] = t[f"course{c}_avg_st"]
 
-        row["pattern_1_2"] = 1.0 if [a, b] == [1, 2] else 0.0
-        row["pattern_1_3"] = 1.0 if [a, b] == [1, 3] else 0.0
-        row["pattern_2_1"] = 1.0 if [a, b] == [2, 1] else 0.0
-        row["pattern_3_1"] = 1.0 if [a, b] == [3, 1] else 0.0
+        out["top3_lane_fit_place_rate_mean"] = _mean([
+            out["first_lane_fit_place_rate"],
+            out["second_lane_fit_place_rate"],
+            out["third_lane_fit_place_rate"],
+        ])
+        out["top3_lane_fit_avg_st_mean"] = _mean([
+            out["first_lane_fit_avg_st"],
+            out["second_lane_fit_avg_st"],
+            out["third_lane_fit_avg_st"],
+        ])
 
-        out_rows.append(row)
+        out["f_s_lane_fit_place_rate_diff"] = out["first_lane_fit_place_rate"] - out["second_lane_fit_place_rate"]
+        out["f_t_lane_fit_place_rate_diff"] = out["first_lane_fit_place_rate"] - out["third_lane_fit_place_rate"]
+        out["s_t_lane_fit_place_rate_diff"] = out["second_lane_fit_place_rate"] - out["third_lane_fit_place_rate"]
 
-    return out_rows
+        out["f_s_lane_fit_avg_st_diff"] = out["first_lane_fit_avg_st"] - out["second_lane_fit_avg_st"]
+        out["f_t_lane_fit_avg_st_diff"] = out["first_lane_fit_avg_st"] - out["third_lane_fit_avg_st"]
+        out["s_t_lane_fit_avg_st_diff"] = out["second_lane_fit_avg_st"] - out["third_lane_fit_avg_st"]
+
+        rows.append(out)
+
+    return rows

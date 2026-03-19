@@ -7,3 +7,4 @@ lightgbm
 requests
 beautifulsoup4
 lxml
+joblib
