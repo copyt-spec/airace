@@ -10,9 +10,10 @@ __pycache__/
 data/datasets/*.csv
 
 # ===== モデル（超重要）=====
-data/models/*.joblib
-data/models/*.pkl
-data/models/*.json
+data/models/*
+!data/models/trifecta120_model_render.joblib
+!data/models/trifecta120_model_render_meta.json
+!data/models/trifecta120_model_render_labels.json
 
 # Mac
 .DS_Store
