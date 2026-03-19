@@ -1,9 +1,6 @@
 from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
-import os
-
-IS_RENDER = os.environ.get("RENDER", "").lower() == "true"
 
 JCD_MARUGAME = 15
 JCD_TODA = 2
@@ -17,50 +14,38 @@ class RaceController:
 
     # ===== import wrappers =====
     def _fetch_all_marugame_entries_once(self, date: str):
-        if IS_RENDER:
-            return []
         from engine.marugame_fetcher import fetch_all_entries_once
         return fetch_all_entries_once(date)
 
     def _fetch_all_toda_entries_once(self, date: str):
-        if IS_RENDER:
-            return []
         from engine.toda_fetcher import fetch_all_toda_entries_once
         return fetch_all_toda_entries_once(date)
 
     def _fetch_all_kojima_entries_once(self, date: str):
-        if IS_RENDER:
-            return []
         from engine.kojima_fetcher import fetch_all_kojima_entries_once
         return fetch_all_kojima_entries_once(date)
 
+    def _fetch_marugame_racelist(self, race_no: int, date: str):
+        from engine.marugame_fetcher import fetch_marugame_racelist
+        return fetch_marugame_racelist(race_no, date)
+
     def _fetch_toda_racelist(self, race_no: int, date: str):
-        if IS_RENDER:
-            return []
         from engine.toda_fetcher import fetch_toda_racelist
         return fetch_toda_racelist(race_no, date)
 
     def _fetch_kojima_racelist(self, race_no: int, date: str):
-        if IS_RENDER:
-            return []
         from engine.kojima_fetcher import fetch_kojima_racelist
         return fetch_kojima_racelist(race_no, date)
 
     def _fetch_odds(self, race_no: int, date: str, venue_code: int):
-        if IS_RENDER:
-            return {}
         from engine.odds_fetcher import fetch_odds
         return fetch_odds(race_no, date, venue_code=venue_code)
 
     def _fetch_beforeinfo_marugame(self, race_no: int, date: str):
-        if IS_RENDER:
-            return {}
         from engine.beforeinfo_fetcher import fetch_beforeinfo
         return fetch_beforeinfo(race_no, date)
 
     def _fetch_beforeinfo_venue(self, race_no: int, date: str, venue_code: int):
-        if IS_RENDER:
-            return {}
         from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
         return fetch_beforeinfo_venue(race_no, date, venue_code=venue_code)
 
@@ -71,8 +56,6 @@ class RaceController:
         race_no: int,
         venue_code: int,
     ):
-        if IS_RENDER:
-            return [dict(x) for x in entries]
         from engine.racelist_enricher import enrich_entries_with_racelist
         return enrich_entries_with_racelist(
             entries,
@@ -202,16 +185,8 @@ class RaceController:
 
     # ===== 1R詳細用 =====
     def get_entries_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        all_entries = self._fetch_all_marugame_entries_once(date)
-        out: List[Dict[str, Any]] = []
-
-        for row in all_entries:
-            try:
-                if int(row.get("race_no", 0)) == int(race_no):
-                    out.append(dict(row))
-            except Exception:
-                continue
-
+        rows = self._fetch_marugame_racelist(race_no, date)
+        out = [dict(x) for x in rows]
         out = self._dedupe_by_lane(out)
         out.sort(key=lambda x: int(x.get("lane", 0)))
         return out
