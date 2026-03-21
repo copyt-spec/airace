@@ -156,6 +156,57 @@ def _inject_exhibit_and_st_from_beforeinfo(entries: List[Dict[str, Any]], before
             e["course"] = course
 
 
+def _normalize_motor_boat_rate_fields(entries: List[Dict[str, Any]]) -> None:
+    if not entries:
+        return
+
+    for e in entries:
+        motor_no = (
+            e.get("motor_no")
+            or e.get("motor")
+            or ""
+        )
+        if motor_no not in (None, "", "-", "－"):
+            e["motor_no"] = motor_no
+
+        boat_no = (
+            e.get("boat_no")
+            or e.get("boat")
+            or ""
+        )
+        if boat_no not in (None, "", "-", "－"):
+            e["boat_no"] = boat_no
+
+        motor_rate = (
+            e.get("motor_rate")
+            or e.get("motor_2rate")
+            or e.get("motor_two_rate")
+            or e.get("motor_quinella_rate")
+            or e.get("motor2_rate")
+            or e.get("motor2rate")
+            or ""
+        )
+        if motor_rate not in (None, "", "-", "－"):
+            e["motor_rate"] = motor_rate
+            e["motor_2rate"] = motor_rate
+
+        boat_rate = (
+            e.get("boat_rate")
+            or e.get("boat_2rate")
+            or e.get("boat_two_rate")
+            or e.get("boat_quinella_rate")
+            or e.get("boat2_rate")
+            or e.get("boat2rate")
+            or ""
+        )
+        if boat_rate not in (None, "", "-", "－"):
+            e["boat_rate"] = boat_rate
+            e["boat_2rate"] = boat_rate
+
+    if _is_debug_request() and entries:
+        print("[DBG] entry sample keys:", sorted(entries[0].keys()))
+        print("[DBG] entry sample row:", entries[0])
+
 def _preds_to_probabilities(ai_preds: List[Dict[str, Any]]) -> Dict[str, float]:
     probabilities: Dict[str, float] = {}
     for row in ai_preds:
@@ -279,8 +330,9 @@ def _render_venue_page(venue_name: str):
             print("[BEFOREINFO_ERROR]", e)
 
     _inject_exhibit_and_st_from_beforeinfo(entries, beforeinfo_for_template)
+    _normalize_motor_boat_rate_fields(entries)
     pre_info = _pre_info_from_beforeinfo(beforeinfo_for_template)
-
+    
     try:
         if venue_name == "戸田":
             grouped_odds = controller.get_odds_only_toda(race_no=race_no, date=date)
