@@ -309,6 +309,23 @@
   {% endif %}
   {% set godata = go.get('data') if go else {} %}
 
+  {% set pred_rows = preds if preds is defined and preds else [] %}
+
+  {% set display_best_bets = [] %}
+  {% if best_bets is defined and best_bets %}
+    {% set display_best_bets = best_bets %}
+  {% elif pred_rows %}
+    {% set best_ns = namespace(rows=[]) %}
+    {% for p in pred_rows %}
+      {% if p.get("is_best_bet") %}
+        {% set best_ns.rows = best_ns.rows + [p] %}
+      {% endif %}
+    {% endfor %}
+    {% if best_ns.rows %}
+      {% set display_best_bets = best_ns.rows | sort(attribute='buy_rank') %}
+    {% endif %}
+  {% endif %}
+
   {% macro get_odd_from_grouped(combo_str, godata) -%}
     {%- if not godata -%}{%- else -%}
       {%- set parts = combo_str.split('-') -%}
@@ -514,6 +531,48 @@
       </div>
 
       <div class="sideStack">
+
+        <div class="card">
+          <div class="hd">
+            <div class="ttl">最強の買い目</div>
+            <div class="tiny muted">prob重視 + EV補正</div>
+          </div>
+          <div class="bd">
+            {% if display_best_bets and (display_best_bets|length > 0) %}
+              <div class="ranklist">
+                {% for r in display_best_bets %}
+                  <div class="rankitem">
+                    <div class="rankleft">
+                      <div class="rk">{{ r.get("buy_rank", loop.index) }}</div>
+                      <div style="min-width:0;">
+                        <div class="combo">{{ r.get("combo", "") }}</div>
+                      </div>
+                    </div>
+                    <div class="rightbox">
+                      <div class="pval">S {{ "%.3f"|format(r.get("buy_score", 0.0)) }}</div>
+                      <div class="oval">
+                        odds
+                        {{
+                          "%.2f"|format(
+                            r.get("odds_raw", r.get("odds", 0.0)) or 0.0
+                          )
+                        }}
+                      </div>
+                      <div class="evval">
+                        p {{ "%.2f"|format((r.get("prob", r.get("score", 0.0)) or 0.0) * 100.0) }}%
+                        / EV {{ "%.2f"|format(r.get("ev_raw", r.get("ev", 0.0)) or 0.0) }}
+                      </div>
+                    </div>
+                  </div>
+                {% endfor %}
+              </div>
+            {% else %}
+              <div class="warn">
+                最強の買い目がまだありません。
+              </div>
+            {% endif %}
+          </div>
+        </div>
 
         <div class="card">
           <div class="hd">

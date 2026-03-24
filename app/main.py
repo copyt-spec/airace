@@ -4,7 +4,7 @@ import os
 import traceback
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List
 
 import numpy as np
 from flask import Flask, render_template, request
@@ -12,413 +12,413 @@ from flask import Flask, render_template, request
 try:
     from app.controller import RaceController
 except Exception as e:
-    print("[IMPORT_ERROR] from app.controller import RaceController failed:", e)
+    print("[IMPORT_ERROR]", e)
     RaceController = None  # type: ignore
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
-VENUE_CODE_MAP: Dict[str, int] = {
-    "丸亀": 15,
-    "戸田": 2,
-    "児島": 16,
-}
 
-
+# =========================
+# 基本ユーティリティ
+# =========================
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
-        if x is None:
+        if x is None or x == "":
             return default
-        if isinstance(x, (int, float, np.floating)):
-            v = float(x)
-            return v if np.isfinite(v) else default
-        s = str(x).strip()
-        if s == "":
-            return default
-        v = float(s)
-        return v if np.isfinite(v) else default
+        return float(x)
     except Exception:
         return default
 
 
-def _to_int(x: Any, default: int = 0) -> int:
+def _safe_int(x: Any, default: int = 0) -> int:
     try:
-        return int(str(x).strip())
+        if x is None or x == "":
+            return default
+        return int(float(x))
     except Exception:
         return default
 
 
-def _is_debug_request() -> bool:
-    return request.args.get("debug", "").strip() in ("1", "true", "True", "yes", "on")
-
-
-def _today_yyyymmdd_tokyo() -> str:
+def _today() -> str:
     return datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y%m%d")
 
 
-def _get_date_default() -> str:
-    return request.args.get("date", "").strip() or _today_yyyymmdd_tokyo()
-
-
 def _blank_races() -> List[Dict[str, Any]]:
-    return [{"race_no": rn, "entries": []} for rn in range(1, 13)]
+    return [{"race_no": i, "entries": []} for i in range(1, 13)]
 
 
-def _calc_ev_cutoffs(ev_result: Dict[str, float]) -> Tuple[Optional[float], Optional[float]]:
-    if not ev_result:
-        return None, None
-    arr = np.array([float(v) for v in ev_result.values() if np.isfinite(float(v))], dtype=float)
-    if arr.size == 0:
-        return None, None
-    return float(np.quantile(arr, 0.90)), float(np.quantile(arr, 0.95))
+def _debug_title(title: str) -> None:
+    print("\n" + "=" * 80)
+    print(f"[DEBUG] {title}")
+    print("=" * 80)
 
 
-def _normalize_beforeinfo_dict(beforeinfo_raw: Any) -> Dict[str, Any]:
-    if not beforeinfo_raw:
+def _debug_print(label: str, value: Any) -> None:
+    print(f"[DEBUG] {label}: {value}")
+
+
+def _debug_sample_list(label: str, rows: Any, max_items: int = 2) -> None:
+    if not isinstance(rows, list):
+        print(f"[DEBUG] {label}: <not list> {type(rows)}")
+        return
+
+    print(f"[DEBUG] {label} len = {len(rows)}")
+    for i, row in enumerate(rows[:max_items]):
+        try:
+            print(f"[DEBUG] {label}[{i}] keys = {list(row.keys()) if isinstance(row, dict) else type(row)}")
+            print(f"[DEBUG] {label}[{i}] = {row}")
+        except Exception as e:
+            print(f"[DEBUG] {label}[{i}] print error = {e}")
+
+
+def _debug_sample_dict(label: str, d: Any, max_items: int = 5) -> None:
+    if not isinstance(d, dict):
+        print(f"[DEBUG] {label}: <not dict> {type(d)}")
+        return
+
+    print(f"[DEBUG] {label} len = {len(d)}")
+    try:
+        items = list(d.items())[:max_items]
+        for k, v in items:
+            print(f"[DEBUG] {label}[{k}] = {v}")
+    except Exception as e:
+        print(f"[DEBUG] {label} print error = {e}")
+
+
+def _normalize_beforeinfo_map(beforeinfo: Any) -> Dict[Any, Any]:
+    """
+    template 側で beforeinfo[lane] / beforeinfo["1"] 両対応に寄せる
+    """
+    if not isinstance(beforeinfo, dict):
         return {}
-    if isinstance(beforeinfo_raw, dict):
-        return beforeinfo_raw
 
-    out: Dict[str, Any] = {}
-    for k in ("weather", "wind_speed", "wind_direction", "wind_dir", "wave_cm", "wind_speed_mps"):
-        if hasattr(beforeinfo_raw, k):
-            out[k] = getattr(beforeinfo_raw, k)
+    out: Dict[Any, Any] = {}
 
-    if hasattr(beforeinfo_raw, "lanes"):
-        lanes = getattr(beforeinfo_raw, "lanes")
-        if isinstance(lanes, dict):
-            for ln, v in lanes.items():
-                out[ln] = v
+    # 元データをそのまま保持
+    for k, v in beforeinfo.items():
+        out[k] = v
+        try:
+            ik = int(k)
+            out[ik] = v
+            out[str(ik)] = v
+        except Exception:
+            pass
+
+    rows = beforeinfo.get("entries") or beforeinfo.get("data") or beforeinfo.get("rows") or []
+    if isinstance(rows, list):
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+
+            lane = (
+                row.get("lane")
+                or row.get("艇番")
+                or row.get("艇")
+                or row.get("枠")
+                or row.get("teiban")
+            )
+            lane = _safe_int(lane, 0)
+            if lane in range(1, 7):
+                out[lane] = row
+                out[str(lane)] = row
 
     return out
 
 
-def _pre_info_from_beforeinfo(beforeinfo: Dict[str, Any]) -> Dict[str, Any]:
-    if not beforeinfo:
-        return {
-            "weather": "",
-            "wind_dir": "",
-            "wind_direction": "",
-            "wind_speed": 0.0,
-            "wind_speed_mps": 0.0,
-            "wave_cm": 0.0,
-        }
+# =========================
+# EV改善ロジック
+# =========================
+def _calc_ev(prob: float, odds: float) -> float:
+    if odds <= 0:
+        return 0.0
 
-    wind_dir = str(beforeinfo.get("wind_dir") or beforeinfo.get("wind_direction") or "").strip()
-    wind_speed = _safe_float(
-        beforeinfo.get("wind_speed_mps", beforeinfo.get("wind_speed", 0.0)),
-        0.0,
+    odds_adj = np.log1p(odds)
+    ev = prob * odds_adj
+
+    if odds > 80:
+        ev *= 0.7
+    if odds > 150:
+        ev *= 0.5
+
+    return float(ev)
+
+
+def _extract_best_bets_from_preds(preds: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    best: List[Dict[str, Any]] = []
+
+    for p in preds:
+        if p.get("is_best_bet"):
+            best.append(dict(p))
+
+    best.sort(
+        key=lambda x: (
+            _safe_int(x.get("buy_rank", 999), 999),
+            -_safe_float(x.get("buy_score", 0.0), 0.0),
+        )
     )
-    wave_cm = _safe_float(beforeinfo.get("wave_cm", beforeinfo.get("wave", 0.0)), 0.0)
-    weather = str(beforeinfo.get("weather") or "").strip()
-
-    return {
-        "weather": weather,
-        "wind_dir": wind_dir,
-        "wind_direction": wind_dir,
-        "wind_speed": wind_speed,
-        "wind_speed_mps": wind_speed,
-        "wave_cm": wave_cm,
-    }
+    return best
 
 
-def _inject_exhibit_and_st_from_beforeinfo(entries: List[Dict[str, Any]], beforeinfo: Dict[str, Any]) -> None:
-    if not entries or not beforeinfo:
-        return
-
-    for e in entries:
-        lane = _to_int(e.get("lane", 0), 0)
-        if lane <= 0:
-            continue
-
-        info = beforeinfo.get(lane)
-        if info is None:
-            info = beforeinfo.get(str(lane))
-        if not isinstance(info, dict):
-            continue
-
-        ex = info.get("exhibit_time")
-        if ex is None:
-            ex = info.get("exhibit")
-
-        st = info.get("st")
-        if st is None:
-            st = info.get("start_timing")
-
-        course = info.get("course")
-        if course is None:
-            course = info.get("course_no")
-
-        if e.get("exhibit") in (None, "", 0, "0") and ex not in (None, "", 0, "0"):
-            e["exhibit"] = ex
-        if e.get("start_timing") in (None, "", 0, "0") and st not in (None, "", 0, "0"):
-            e["start_timing"] = st
-        if e.get("course") in (None, "", 0, "0") and course not in (None, "", 0, "0"):
-            e["course"] = course
-
-
-def _normalize_motor_boat_rate_fields(entries: List[Dict[str, Any]]) -> None:
-    if not entries:
-        return
-
-    for e in entries:
-        motor_no = (
-            e.get("motor_no")
-            or e.get("motor")
-            or ""
-        )
-        if motor_no not in (None, "", "-", "－"):
-            e["motor_no"] = motor_no
-
-        boat_no = (
-            e.get("boat_no")
-            or e.get("boat")
-            or ""
-        )
-        if boat_no not in (None, "", "-", "－"):
-            e["boat_no"] = boat_no
-
-        motor_rate = (
-            e.get("motor_rate")
-            or e.get("motor_2rate")
-            or e.get("motor_two_rate")
-            or e.get("motor_quinella_rate")
-            or e.get("motor2_rate")
-            or e.get("motor2rate")
-            or ""
-        )
-        if motor_rate not in (None, "", "-", "－"):
-            e["motor_rate"] = motor_rate
-            e["motor_2rate"] = motor_rate
-
-        boat_rate = (
-            e.get("boat_rate")
-            or e.get("boat_2rate")
-            or e.get("boat_two_rate")
-            or e.get("boat_quinella_rate")
-            or e.get("boat2_rate")
-            or e.get("boat2rate")
-            or ""
-        )
-        if boat_rate not in (None, "", "-", "－"):
-            e["boat_rate"] = boat_rate
-            e["boat_2rate"] = boat_rate
-
-    if _is_debug_request() and entries:
-        print("[DBG] entry sample keys:", sorted(entries[0].keys()))
-        print("[DBG] entry sample row:", entries[0])
-
-def _preds_to_probabilities(ai_preds: List[Dict[str, Any]]) -> Dict[str, float]:
-    probabilities: Dict[str, float] = {}
-    for row in ai_preds:
-        combo = str(row.get("combo", "")).strip()
-        if not combo:
-            continue
-        probabilities[combo] = _safe_float(row.get("score", 0.0), 0.0)
-
-    total = sum(probabilities.values())
-    if total > 0:
-        probabilities = {k: v / total for k, v in probabilities.items()}
-    return probabilities
-
-
-def _preds_to_ev_result(ai_preds: List[Dict[str, Any]]) -> Dict[str, float]:
-    ev_result: Dict[str, float] = {}
-    for row in ai_preds:
-        combo = str(row.get("combo", "")).strip()
-        if not combo:
-            continue
-        if row.get("ev") is None:
-            continue
-        ev_result[combo] = _safe_float(row.get("ev", 0.0), 0.0)
-    return ev_result
-
-
-def _debug_print_top10(probabilities: Dict[str, float]) -> None:
-    if not probabilities:
-        print("[DBG] TOP10 probs: (empty)")
-        return
-    top = sorted(probabilities.items(), key=lambda kv: float(kv[1]), reverse=True)[:10]
-    print("[DBG] TOP10 probs:")
-    for c, p in top:
-        print(f"  {c} {float(p):.6f}")
-
-
-def _render_venue_page(venue_name: str):
-    date = _get_date_default()
-    race_str = request.args.get("race", "").strip()
-    mode = request.args.get("mode", "").strip().lower()
+# =========================
+# メイン描画
+# =========================
+def _render(venue: str):
+    _debug_title("START _render")
 
     if RaceController is None:
-        return "RaceController import failed. Check app/controller.py", 500
+        print("[FATAL] RaceController import failed")
+        return "RaceController の import に失敗しています。", 500
+
+    date = request.args.get("date") or _today()
+    race_str = request.args.get("race")
+    mode = request.args.get("mode")
+
+    _debug_print("venue", venue)
+    _debug_print("date", date)
+    _debug_print("race_str", race_str)
+    _debug_print("mode", mode)
 
     controller = RaceController()
 
-    grouped_odds = None
-    probabilities: Dict[str, float] = {}
-    ev_result: Dict[str, float] = {}
-    ev_cutoff_90 = None
-    ev_cutoff_95 = None
-    selected_race = 0
-
-    pre_info: Dict[str, Any] = {
-        "weather": "",
-        "wind_dir": "",
-        "wind_direction": "",
-        "wind_speed": 0.0,
-        "wind_speed_mps": 0.0,
-        "wave_cm": 0.0,
-    }
-    beforeinfo_for_template: Dict[str, Any] = {}
-
-    if not (mode == "full" and race_str.isdigit()):
-        races = _blank_races()
+    if not race_str:
+        _debug_print("render_mode", "race未指定 -> blank page")
         return render_template(
             "index.html",
-            venue=venue_name,
+            venue=venue,
             date=date,
-            races=races,
+            races=_blank_races(),
             selected_race=0,
-            grouped_odds=None,
+            grouped_odds={},
             probabilities={},
             ev_result={},
-            ev_cutoff_90=None,
-            ev_cutoff_95=None,
-            pre_info=pre_info,
+            preds=[],
+            best_bets=[],
             beforeinfo={},
         )
 
-    race_no = int(race_str)
-    selected_race = race_no
+    race_no = _safe_int(race_str, 0)
+    _debug_print("race_no", race_no)
+
+    if race_no not in range(1, 13):
+        _debug_print("invalid_race_no", race_no)
+        return render_template(
+            "index.html",
+            venue=venue,
+            date=date,
+            races=_blank_races(),
+            selected_race=0,
+            grouped_odds={},
+            probabilities={},
+            ev_result={},
+            preds=[],
+            best_bets=[],
+            beforeinfo={},
+        )
+
+    # =========================
+    # 出走表
+    # =========================
+    _debug_title("ENTRIES FETCH")
 
     try:
-        if venue_name == "戸田":
+        if venue == "戸田":
             entries = controller.get_entries_toda_race(date, race_no)
-        elif venue_name == "児島":
+        elif venue == "児島":
             entries = controller.get_entries_kojima_race(date, race_no)
         else:
             entries = controller.get_entries_race(date, race_no)
     except Exception as e:
-        return f"get_entries_race failed: {e}", 500
+        print("[ERROR] entries fetch failed")
+        traceback.print_exc()
+        entries = []
 
-    entries = [dict(x) for x in entries]
-    races = _blank_races()
-    races[race_no - 1]["entries"] = entries
+    entries = [dict(e) for e in entries] if entries else []
+    _debug_sample_list("entries(before enrich)", entries, max_items=3)
 
     try:
-        if venue_name == "戸田":
+        if venue == "戸田":
             entries = controller.enrich_entries_toda(entries, date=date, race_no=race_no)
-        elif venue_name == "児島":
+        elif venue == "児島":
             entries = controller.enrich_entries_kojima(entries, date=date, race_no=race_no)
         else:
             entries = controller.enrich_entries_marugame(entries, date=date, race_no=race_no)
-    except Exception as e:
-        if _is_debug_request():
-            print("[ENRICH_ERROR]", e)
+    except Exception:
+        print("[ERROR] enrich failed")
+        traceback.print_exc()
+
+    entries = [dict(e) for e in entries] if entries else []
+    _debug_sample_list("entries(after enrich)", entries, max_items=3)
+
+    # =========================
+    # beforeinfo
+    # =========================
+    _debug_title("BEFOREINFO FETCH")
 
     try:
-        if venue_name == "戸田":
-            bi_raw = controller.get_beforeinfo_only_toda(race_no=race_no, date=date)
-        elif venue_name == "児島":
-            bi_raw = controller.get_beforeinfo_only_kojima(race_no=race_no, date=date)
+        if venue == "戸田":
+            beforeinfo = controller.get_beforeinfo_only_toda(race_no=race_no, date=date)
+        elif venue == "児島":
+            beforeinfo = controller.get_beforeinfo_only_kojima(race_no=race_no, date=date)
         else:
-            bi_raw = controller.get_beforeinfo_only(race_no=race_no, date=date)
+            beforeinfo = controller.get_beforeinfo_only(race_no=race_no, date=date)
+    except Exception:
+        print("[ERROR] beforeinfo fetch failed")
+        traceback.print_exc()
+        beforeinfo = {}
 
-        beforeinfo_for_template = _normalize_beforeinfo_dict(bi_raw)
-    except Exception as e:
-        beforeinfo_for_template = {}
-        if _is_debug_request():
-            print("[BEFOREINFO_ERROR]", e)
+    _debug_sample_dict("beforeinfo(raw)", beforeinfo, max_items=10)
 
-    _inject_exhibit_and_st_from_beforeinfo(entries, beforeinfo_for_template)
-    _normalize_motor_boat_rate_fields(entries)
-    pre_info = _pre_info_from_beforeinfo(beforeinfo_for_template)
-    
+    beforeinfo = _normalize_beforeinfo_map(beforeinfo)
+    _debug_sample_dict("beforeinfo(normalized)", beforeinfo, max_items=10)
+
+    # =========================
+    # オッズ
+    # =========================
+    _debug_title("ODDS FETCH")
+
     try:
-        if venue_name == "戸田":
-            grouped_odds = controller.get_odds_only_toda(race_no=race_no, date=date)
-        elif venue_name == "児島":
-            grouped_odds = controller.get_odds_only_kojima(race_no=race_no, date=date)
+        if venue == "戸田":
+            odds = controller.get_odds_only_toda(race_no=race_no, date=date)
+        elif venue == "児島":
+            odds = controller.get_odds_only_kojima(race_no=race_no, date=date)
         else:
-            grouped_odds = controller.get_odds_only(race_no=race_no, date=date)
-    except Exception as e:
-        grouped_odds = None
-        if _is_debug_request():
-            print("[ODDS_ERROR]", e)
+            odds = controller.get_odds_only(race_no=race_no, date=date)
+    except Exception:
+        print("[ERROR] odds fetch failed")
+        traceback.print_exc()
+        odds = {}
 
-    ai_preds: List[Dict[str, Any]] = []
+    _debug_sample_dict("grouped_odds", odds, max_items=10)
+
+    godata = odds.get("data", {}) if isinstance(odds, dict) else {}
+    _debug_print("godata_exists", bool(godata))
+    _debug_print("godata_cols", list(godata.keys()) if isinstance(godata, dict) else [])
+
+    # =========================
+    # AI
+    # =========================
+    _debug_title("AI PREDICT")
+
     try:
-        if venue_name == "戸田":
-            ai_preds = controller.get_ai_predictions_toda(
-                date=date,
-                race_no=race_no,
-                top_n=120,
-                with_odds=True,
-            )
-        elif venue_name == "児島":
-            ai_preds = controller.get_ai_predictions_kojima(
-                date=date,
-                race_no=race_no,
-                top_n=120,
-                with_odds=True,
-            )
+        if venue == "戸田":
+            preds = controller.get_ai_predictions_toda(date, race_no, 120, True)
+        elif venue == "児島":
+            preds = controller.get_ai_predictions_kojima(date, race_no, 120, True)
         else:
-            ai_preds = controller.get_ai_predictions_marugame(
-                date=date,
-                race_no=race_no,
-                top_n=120,
-                with_odds=True,
-            )
-    except Exception as e:
-        print("[AI_ERROR]", e)
-        print(traceback.format_exc())
-        ai_preds = []
+            preds = controller.get_ai_predictions_marugame(date, race_no, 120, True)
+    except Exception:
+        print("[ERROR] AI predict failed")
+        traceback.print_exc()
+        preds = []
 
-    probabilities = _preds_to_probabilities(ai_preds)
-    ev_result = _preds_to_ev_result(ai_preds)
-    ev_cutoff_90, ev_cutoff_95 = _calc_ev_cutoffs(ev_result)
+    preds = [dict(p) for p in preds] if preds else []
+    _debug_sample_list("preds", preds, max_items=5)
 
-    if _is_debug_request():
-        _debug_print_top10(probabilities)
+    probabilities: Dict[str, float] = {}
+    ev_result: Dict[str, float] = {}
 
+    for p in preds:
+        combo = str(p.get("combo", "")).strip()
+        if not combo:
+            continue
+
+        prob = _safe_float(p.get("score", p.get("prob", 0.0)), 0.0)
+
+        parts = combo.split("-")
+        if len(parts) != 3:
+            probabilities[combo] = prob
+            ev_result[combo] = 0.0
+            continue
+
+        a = _safe_int(parts[0], 0)
+        b = _safe_int(parts[1], 0)
+        c = _safe_int(parts[2], 0)
+
+        odd = 0.0
+        if isinstance(godata, dict) and a in godata:
+            col = godata.get(a, {}) or {}
+            odd = _safe_float(col.get((b, c)) or col.get(f"{b}{c}") or 0, 0.0)
+
+        ev = _calc_ev(prob, odd)
+
+        probabilities[combo] = prob
+        ev_result[combo] = ev
+
+        if "odds" not in p or _safe_float(p.get("odds", 0.0), 0.0) <= 0:
+            p["odds"] = odd
+        if "ev" not in p or _safe_float(p.get("ev", 0.0), 0.0) <= 0:
+            p["ev"] = ev
+
+    _debug_print("probabilities_len(before norm)", len(probabilities))
+    _debug_print("ev_result_len", len(ev_result))
+
+    total = sum(probabilities.values())
+    _debug_print("probabilities_total(before norm)", total)
+
+    if total > 0:
+        probabilities = {k: v / total for k, v in probabilities.items()}
+
+    _debug_sample_dict("probabilities(after norm)", probabilities, max_items=10)
+    _debug_sample_dict("ev_result", ev_result, max_items=10)
+
+    # =========================
+    # 最強買い目
+    # =========================
+    _debug_title("BEST BETS EXTRACT")
+
+    best_bets = _extract_best_bets_from_preds(preds)
+    _debug_sample_list("best_bets", best_bets, max_items=5)
+
+    races = _blank_races()
     races[race_no - 1]["entries"] = entries
+
+    _debug_title("RENDER TEMPLATE")
+    _debug_print("selected_race", race_no)
+    _debug_print("entries_len", len(entries))
+    _debug_print("preds_len", len(preds))
+    _debug_print("best_bets_len", len(best_bets))
+    _debug_print("probabilities_len", len(probabilities))
+    _debug_print("ev_result_len", len(ev_result))
 
     return render_template(
         "index.html",
-        venue=venue_name,
+        venue=venue,
         date=date,
         races=races,
-        selected_race=selected_race,
-        grouped_odds=grouped_odds,
+        selected_race=race_no,
+        grouped_odds=odds,
         probabilities=probabilities,
         ev_result=ev_result,
-        ev_cutoff_90=ev_cutoff_90,
-        ev_cutoff_95=ev_cutoff_95,
-        pre_info=pre_info,
-        beforeinfo=beforeinfo_for_template,
+        preds=preds,
+        best_bets=best_bets,
+        beforeinfo=beforeinfo,
+        mode=mode,
     )
 
 
+# =========================
+# ルーティング
+# =========================
 @app.route("/")
 def home():
-    date = request.args.get("date", "").strip() or _today_yyyymmdd_tokyo()
-    return render_template("home.html", date=date)
+    return render_template("home.html", date=_today())
 
 
 @app.route("/marugame")
 def marugame():
-    return _render_venue_page("丸亀")
+    return _render("丸亀")
 
 
 @app.route("/toda")
 def toda():
-    return _render_venue_page("戸田")
+    return _render("戸田")
 
 
 @app.route("/kojima")
 def kojima():
-    return _render_venue_page("児島")
+    return _render("児島")
 
 
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 5000))
-    app.run(host="0.0.0.0", port=port, debug=True)
+    app.run(host="0.0.0.0", port=port)

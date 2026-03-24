@@ -1,6 +1,16 @@
 from __future__ import annotations
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List
+
+from engine.marugame_fetcher import fetch_all_entries_once as fetch_all_marugame_entries_once
+from engine.toda_fetcher import fetch_all_toda_entries_once, fetch_toda_racelist
+from engine.kojima_fetcher import fetch_all_kojima_entries_once, fetch_kojima_racelist
+from engine.odds_fetcher import fetch_odds
+from engine.beforeinfo_fetcher import fetch_beforeinfo
+from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
+from engine.racelist_enricher import enrich_entries_with_racelist
+from engine.render_ai_predictor import RenderAIPredictor
+from engine.buy_selector import select_best_bets
 
 JCD_MARUGAME = 15
 JCD_TODA = 2
@@ -9,98 +19,24 @@ JCD_KOJIMA = 16
 
 class RaceController:
     def __init__(self) -> None:
-        from engine.render_ai_predictor import RenderAIPredictor
-        self.ai_predictor = RenderAIPredictor(debug=False)
-
-    # ===== import wrappers =====
-    def _fetch_all_marugame_entries_once(self, date: str):
-        from engine.marugame_fetcher import fetch_all_entries_once
-        return fetch_all_entries_once(date)
-
-    def _fetch_all_toda_entries_once(self, date: str):
-        from engine.toda_fetcher import fetch_all_toda_entries_once
-        return fetch_all_toda_entries_once(date)
-
-    def _fetch_all_kojima_entries_once(self, date: str):
-        from engine.kojima_fetcher import fetch_all_kojima_entries_once
-        return fetch_all_kojima_entries_once(date)
-
-    def _fetch_marugame_racelist(self, race_no: int, date: str):
-        from engine.marugame_fetcher import fetch_marugame_racelist
-        return fetch_marugame_racelist(race_no, date)
-
-    def _fetch_toda_racelist(self, race_no: int, date: str):
-        from engine.toda_fetcher import fetch_toda_racelist
-        return fetch_toda_racelist(race_no, date)
-
-    def _fetch_kojima_racelist(self, race_no: int, date: str):
-        from engine.kojima_fetcher import fetch_kojima_racelist
-        return fetch_kojima_racelist(race_no, date)
-
-    def _fetch_odds(self, race_no: int, date: str, venue_code: int):
-        from engine.odds_fetcher import fetch_odds
-        return fetch_odds(race_no, date, venue_code=venue_code)
-
-    def _fetch_beforeinfo_marugame(self, race_no: int, date: str):
-        from engine.beforeinfo_fetcher import fetch_beforeinfo
-        return fetch_beforeinfo(race_no, date)
-
-    def _fetch_beforeinfo_venue(self, race_no: int, date: str, venue_code: int):
-        from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
-        return fetch_beforeinfo_venue(race_no, date, venue_code=venue_code)
-
-    def _enrich_entries_with_racelist(
-        self,
-        entries: List[Dict[str, Any]],
-        date: str,
-        race_no: int,
-        venue_code: int,
-    ):
-        from engine.racelist_enricher import enrich_entries_with_racelist
-        return enrich_entries_with_racelist(
-            entries,
-            date=date,
-            race_no=race_no,
-            venue_code=venue_code,
-        )
-
-    def _enrich_entries_with_racer_stats(self, entries: List[Dict[str, Any]]):
-        try:
-            from engine.racer_stats_loader import enrich_entries_with_racer_stats
-            return enrich_entries_with_racer_stats([dict(x) for x in entries])
-        except Exception:
-            return [dict(x) for x in entries]
+        self.ai_predictor = RenderAIPredictor()
 
     # ===== 一覧用 =====
     def get_all_entries(self, date: str) -> List[Dict[str, Any]]:
-        return self._fetch_all_marugame_entries_once(date)
+        return fetch_all_marugame_entries_once(date)
 
     def get_all_entries_toda(self, date: str) -> List[Dict[str, Any]]:
-        return self._fetch_all_toda_entries_once(date)
+        return fetch_all_toda_entries_once(date)
 
     def get_all_entries_kojima(self, date: str) -> List[Dict[str, Any]]:
-        return self._fetch_all_kojima_entries_once(date)
+        return fetch_all_kojima_entries_once(date)
 
-    # ===== 共通 =====
+    # ===== 共通小物 =====
     def _safe_float(self, v: Any, default: float = 0.0) -> float:
         try:
-            if v is None:
+            if v is None or v == "":
                 return default
-            s = str(v).strip()
-            if s == "":
-                return default
-            s = s.upper()
-            s = s.replace("F.", "0.")
-            s = s.replace("L.", "0.")
-            if s.startswith("."):
-                s = "0" + s
-            if s.endswith("M"):
-                s = s[:-1].strip()
-            if s.endswith("CM"):
-                s = s[:-2].strip()
-            if s.endswith("℃"):
-                s = s[:-1].strip()
-            return float(s)
+            return float(v)
         except Exception:
             return default
 
@@ -111,12 +47,6 @@ class RaceController:
             return int(float(v))
         except Exception:
             return default
-
-    def _safe_str(self, v: Any, default: str = "") -> str:
-        if v is None:
-            return default
-        s = str(v).strip()
-        return s if s else default
 
     def _pick(self, row: Dict[str, Any], keys: List[str], default: Any = None) -> Any:
         for key in keys:
@@ -129,9 +59,6 @@ class RaceController:
         if s in {"A1", "A2", "B1", "B2"}:
             return s
         return ""
-
-    def _is_empty_value(self, v: Any) -> bool:
-        return v in (None, "", "-", "－", "None")
 
     def _dedupe_by_lane(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         lane_map: Dict[int, Dict[str, Any]] = {}
@@ -146,66 +73,37 @@ class RaceController:
         lanes = [self._safe_int(x.get("lane", 0), 0) for x in rows]
         return len(rows) == 6 and sorted(lanes) == [1, 2, 3, 4, 5, 6]
 
-    def _merge_row_prefer_filled(self, base: Dict[str, Any], extra: Dict[str, Any]) -> Dict[str, Any]:
-        out = dict(base)
-        for k, v in extra.items():
-            if k == "lane":
-                continue
-            if self._is_empty_value(out.get(k)) and not self._is_empty_value(v):
-                out[k] = v
-        return out
-
-    def _merge_entries_by_lane(
-        self,
-        base_entries: List[Dict[str, Any]],
-        extra_entries: Optional[List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
-        if not extra_entries:
-            return [dict(x) for x in base_entries]
-
-        base_map = {
-            self._safe_int(x.get("lane", 0), 0): dict(x)
-            for x in base_entries
-            if self._safe_int(x.get("lane", 0), 0) in range(1, 7)
-        }
-        extra_map = {
-            self._safe_int(x.get("lane", 0), 0): dict(x)
-            for x in extra_entries
-            if self._safe_int(x.get("lane", 0), 0) in range(1, 7)
-        }
-
-        merged: List[Dict[str, Any]] = []
-        for lane in range(1, 7):
-            base = base_map.get(lane, {"lane": lane})
-            extra = extra_map.get(lane, {})
-            merged.append(self._merge_row_prefer_filled(base, extra))
-
-        merged.sort(key=lambda x: self._safe_int(x.get("lane", 0), 0))
-        return merged
-
     # ===== 1R詳細用 =====
     def get_entries_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        rows = self._fetch_marugame_racelist(race_no, date)
-        out = [dict(x) for x in rows]
+        all_entries = fetch_all_marugame_entries_once(date)
+        out: List[Dict[str, Any]] = []
+
+        for row in all_entries:
+            try:
+                if int(row.get("race_no", 0)) == int(race_no):
+                    out.append(dict(row))
+            except Exception:
+                continue
+
         out = self._dedupe_by_lane(out)
         out.sort(key=lambda x: int(x.get("lane", 0)))
         return out
 
     def get_entries_toda_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        rows = self._fetch_toda_racelist(race_no, date)
+        rows = fetch_toda_racelist(race_no, date)
         out = [dict(x) for x in rows]
         out = self._dedupe_by_lane(out)
         out.sort(key=lambda x: int(x.get("lane", 0)))
         return out
 
     def get_entries_kojima_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        rows = self._fetch_kojima_racelist(race_no, date)
+        rows = fetch_kojima_racelist(race_no, date)
         out = [dict(x) for x in rows]
         out = self._dedupe_by_lane(out)
         out.sort(key=lambda x: int(x.get("lane", 0)))
         return out
 
-    # ===== odds =====
+    # ===== odds grouped形式 =====
     def _group_odds(self, raw_odds: Dict[str, Any]) -> Dict[str, Any]:
         grouped = {i: {} for i in range(1, 7)}
         numeric_values = []
@@ -236,43 +134,51 @@ class RaceController:
 
     def _flat_odds_map(self, raw_odds: Dict[str, Any]) -> Dict[str, float]:
         out: Dict[str, float] = {}
+
         for combo, odd in raw_odds.items():
             try:
                 out[str(combo)] = float(odd)
             except Exception:
                 continue
+
         return out
 
+    # ===== odds =====
     def get_odds_only(self, race_no: int, date: str) -> Dict[str, Any]:
-        raw_odds = self._fetch_odds(race_no, date, JCD_MARUGAME)
+        raw_odds = fetch_odds(race_no, date, venue_code=JCD_MARUGAME)
         return self._group_odds(raw_odds)
 
     def get_odds_only_toda(self, race_no: int, date: str) -> Dict[str, Any]:
-        raw_odds = self._fetch_odds(race_no, date, JCD_TODA)
+        raw_odds = fetch_odds(race_no, date, venue_code=JCD_TODA)
         return self._group_odds(raw_odds)
 
     def get_odds_only_kojima(self, race_no: int, date: str) -> Dict[str, Any]:
-        raw_odds = self._fetch_odds(race_no, date, JCD_KOJIMA)
+        raw_odds = fetch_odds(race_no, date, venue_code=JCD_KOJIMA)
         return self._group_odds(raw_odds)
 
     # ===== beforeinfo =====
     def get_beforeinfo_only(self, race_no: int, date: str) -> Dict[str, Any]:
-        return self._fetch_beforeinfo_marugame(race_no, date)
+        return fetch_beforeinfo(race_no, date)
 
     def get_beforeinfo_only_toda(self, race_no: int, date: str) -> Dict[str, Any]:
-        return self._fetch_beforeinfo_venue(race_no, date, JCD_TODA)
+        return fetch_beforeinfo_venue(race_no, date, venue_code=JCD_TODA)
 
     def get_beforeinfo_only_kojima(self, race_no: int, date: str) -> Dict[str, Any]:
-        return self._fetch_beforeinfo_venue(race_no, date, JCD_KOJIMA)
+        return fetch_beforeinfo_venue(race_no, date, venue_code=JCD_KOJIMA)
 
-    # ===== racelist enrich =====
+    # ===== motor/boat enrich =====
     def enrich_entries_marugame(
         self,
         entries: List[Dict[str, Any]],
         date: str,
         race_no: int,
     ) -> List[Dict[str, Any]]:
-        return self._enrich_entries_with_racelist(entries, date, race_no, JCD_MARUGAME)
+        return enrich_entries_with_racelist(
+            entries,
+            date=date,
+            race_no=race_no,
+            venue_code=JCD_MARUGAME,
+        )
 
     def enrich_entries_toda(
         self,
@@ -280,7 +186,12 @@ class RaceController:
         date: str,
         race_no: int,
     ) -> List[Dict[str, Any]]:
-        return self._enrich_entries_with_racelist(entries, date, race_no, JCD_TODA)
+        return enrich_entries_with_racelist(
+            entries,
+            date=date,
+            race_no=race_no,
+            venue_code=JCD_TODA,
+        )
 
     def enrich_entries_kojima(
         self,
@@ -288,9 +199,14 @@ class RaceController:
         date: str,
         race_no: int,
     ) -> List[Dict[str, Any]]:
-        return self._enrich_entries_with_racelist(entries, date, race_no, JCD_KOJIMA)
+        return enrich_entries_with_racelist(
+            entries,
+            date=date,
+            race_no=race_no,
+            venue_code=JCD_KOJIMA,
+        )
 
-    # ===== beforeinfo normalize =====
+    # ===== beforeinfo 正規化 =====
     def _normalize_beforeinfo(self, beforeinfo: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
         lane_map: Dict[int, Dict[str, Any]] = {}
 
@@ -316,11 +232,7 @@ class RaceController:
                         0.0,
                     ),
                     "exhibit": self._safe_float(
-                        self._pick(
-                            row,
-                            ["exhibit_time", "exhibit", "tenji_time", "展示タイム", "展示"],
-                            0.0,
-                        ),
+                        self._pick(row, ["exhibit", "tenji_time", "展示タイム", "展示"], 0.0),
                         0.0,
                     ),
                     "course": self._safe_int(
@@ -331,7 +243,10 @@ class RaceController:
 
         if not lane_map:
             for lane in range(1, 7):
-                row = beforeinfo.get(lane) or beforeinfo.get(str(lane))
+                key = str(lane)
+                if key not in beforeinfo:
+                    continue
+                row = beforeinfo.get(key)
                 if not isinstance(row, dict):
                     continue
 
@@ -341,11 +256,7 @@ class RaceController:
                         0.0,
                     ),
                     "exhibit": self._safe_float(
-                        self._pick(
-                            row,
-                            ["exhibit_time", "exhibit", "tenji_time", "展示タイム", "展示"],
-                            0.0,
-                        ),
+                        self._pick(row, ["exhibit", "tenji_time", "展示タイム", "展示"], 0.0),
                         0.0,
                     ),
                     "course": self._safe_int(
@@ -366,8 +277,8 @@ class RaceController:
             }
 
         return {
-            "weather": self._safe_str(self._pick(beforeinfo, ["weather", "天候"], "")),
-            "wind_dir": self._safe_str(self._pick(beforeinfo, ["wind_dir", "wind_direction", "風向"], "")),
+            "weather": str(self._pick(beforeinfo, ["weather", "天候"], "")).strip(),
+            "wind_dir": str(self._pick(beforeinfo, ["wind_dir", "風向"], "")).strip(),
             "wind_speed_mps": self._safe_float(
                 self._pick(beforeinfo, ["wind_speed_mps", "wind_speed", "風速"], 0.0),
                 0.0,
@@ -378,55 +289,7 @@ class RaceController:
             ),
         }
 
-    def _apply_beforeinfo_to_entries(
-        self,
-        entries: List[Dict[str, Any]],
-        beforeinfo: Dict[str, Any],
-    ) -> List[Dict[str, Any]]:
-        lane_map = self._normalize_beforeinfo(beforeinfo)
-        out: List[Dict[str, Any]] = []
-
-        for row in entries:
-            new_row = dict(row)
-            lane = self._safe_int(new_row.get("lane", 0), 0)
-            bi = lane_map.get(lane, {})
-
-            if self._is_empty_value(new_row.get("exhibit")):
-                ex = bi.get("exhibit")
-                if ex not in (None, "", 0, 0.0):
-                    new_row["exhibit"] = ex
-                    new_row["exhibit_time"] = ex
-
-            if self._is_empty_value(new_row.get("start_timing")):
-                st = bi.get("st")
-                if st not in (None, "", 0, 0.0):
-                    new_row["start_timing"] = st
-                    new_row["st"] = st
-
-            if self._is_empty_value(new_row.get("course")):
-                course = bi.get("course")
-                if course not in (None, "", 0):
-                    new_row["course"] = course
-
-            out.append(new_row)
-
-        return out
-
-    def _build_stronger_enriched_entries(
-        self,
-        *,
-        base_entries: List[Dict[str, Any]],
-        beforeinfo: Dict[str, Any],
-        enriched_entries: Optional[List[Dict[str, Any]]],
-    ) -> List[Dict[str, Any]]:
-        merged = self._merge_entries_by_lane(base_entries, enriched_entries)
-        merged = self._apply_beforeinfo_to_entries(merged, beforeinfo)
-        merged = self._enrich_entries_with_racer_stats(merged)
-        merged = self._dedupe_by_lane(merged)
-        merged.sort(key=lambda x: self._safe_int(x.get("lane", 0), 0))
-        return merged
-
-    # ===== AI入力 =====
+    # ===== AI入力用変換 =====
     def _to_ai_entries(
         self,
         entries: List[Dict[str, Any]],
@@ -442,22 +305,6 @@ class RaceController:
 
             before_row = before_lane_map.get(lane, {})
 
-            exhibit_val = self._pick(
-                row,
-                ["exhibit", "exhibit_time", "tenji_time", "展示タイム"],
-                before_row.get("exhibit", 0.0),
-            )
-            st_val = self._pick(
-                row,
-                ["start_timing", "st", "avg_st", "ST", "平均ST"],
-                before_row.get("st", 0.0),
-            )
-            course_val = self._pick(
-                row,
-                ["course", "進入", "course_no"],
-                before_row.get("course", lane),
-            )
-
             ai_row = {
                 "lane": lane,
                 "racer_no": self._safe_int(
@@ -472,8 +319,22 @@ class RaceController:
                     self._pick(row, ["boat", "boat_no", "ボート", "ボート番号"], 0),
                     0,
                 ),
-                "exhibit": self._safe_float(exhibit_val, self._safe_float(before_row.get("exhibit", 0.0), 0.0)),
-                "st": self._safe_float(st_val, self._safe_float(before_row.get("st", 0.0), 0.0)),
+                "exhibit": self._safe_float(
+                    self._pick(
+                        row,
+                        ["exhibit", "tenji_time", "展示タイム"],
+                        before_row.get("exhibit", 0.0),
+                    ),
+                    before_row.get("exhibit", 0.0),
+                ),
+                "st": self._safe_float(
+                    self._pick(
+                        row,
+                        ["st", "avg_st", "ST", "平均ST", "start_timing"],
+                        before_row.get("st", 0.0),
+                    ),
+                    before_row.get("st", 0.0),
+                ),
                 "win_rate": self._safe_float(
                     self._pick(row, ["win_rate", "nation_win_rate", "全国勝率"], 0.0),
                     0.0,
@@ -489,25 +350,11 @@ class RaceController:
                 "age": self._safe_int(self._pick(row, ["age", "年齢"], 0), 0),
                 "weight": self._safe_float(self._pick(row, ["weight", "体重"], 0.0), 0.0),
                 "grade": self._normalize_grade(self._pick(row, ["grade", "class", "級別"], "")),
-                "course": self._safe_int(course_val, self._safe_int(before_row.get("course", lane), lane)),
-                "avg_st": self._safe_float(self._pick(row, ["avg_st"], 0.0), 0.0),
-                "ability_index": self._safe_float(self._pick(row, ["ability_index"], 0.0), 0.0),
-                "prev_ability_index": self._safe_float(self._pick(row, ["prev_ability_index"], 0.0), 0.0),
+                "course": self._safe_int(
+                    self._pick(row, ["course", "進入", "course_no"], before_row.get("course", lane)),
+                    before_row.get("course", lane),
+                ),
             }
-
-            for c in range(1, 7):
-                ai_row[f"racer_course{c}_entry_count"] = self._safe_float(
-                    self._pick(row, [f"racer_course{c}_entry_count"], 0.0),
-                    0.0,
-                )
-                ai_row[f"racer_course{c}_place_rate"] = self._safe_float(
-                    self._pick(row, [f"racer_course{c}_place_rate"], 0.0),
-                    0.0,
-                )
-                ai_row[f"racer_course{c}_avg_st"] = self._safe_float(
-                    self._pick(row, [f"racer_course{c}_avg_st"], 0.0),
-                    0.0,
-                )
 
             ai_entries.append(ai_row)
 
@@ -515,7 +362,61 @@ class RaceController:
         ai_entries.sort(key=lambda x: x["lane"])
         return ai_entries
 
-    # ===== 共通予想 =====
+    def _apply_buy_selection(
+        self,
+        ai_preds: List[Dict[str, Any]],
+        *,
+        top_n: int = 5,
+    ) -> List[Dict[str, Any]]:
+        best_bets = select_best_bets(
+            ai_preds,
+            min_prob=0.03,
+            max_odds_cap=40.0,
+            max_ev_cap=2.2,
+            top_n=top_n,
+            weight_prob=0.60,
+            weight_ev=0.25,
+            weight_odds=0.15,
+        )
+
+        if not best_bets:
+            return ai_preds
+
+        best_bet_map = {str(r.get("combo", "")).strip(): r for r in best_bets}
+        buy_rank_map = {str(r.get("combo", "")).strip(): i + 1 for i, r in enumerate(best_bets)}
+
+        out: List[Dict[str, Any]] = []
+        for row in ai_preds:
+            r = dict(row)
+            combo = str(r.get("combo", "")).strip()
+
+            if combo in buy_rank_map:
+                selected = best_bet_map.get(combo)
+                if selected:
+                    r["buy_score"] = selected.get("buy_score", 0.0)
+                    r["prob_norm"] = selected.get("prob_norm", 0.0)
+                    r["ev_norm"] = selected.get("ev_norm", 0.0)
+                    r["odds_norm"] = selected.get("odds_norm", 0.0)
+                    r["odds_capped"] = selected.get("odds_capped", 0.0)
+                    r["ev_capped"] = selected.get("ev_capped", 0.0)
+                    r["prob"] = selected.get("prob", 0.0)
+                    r["buy_rank"] = buy_rank_map[combo]
+                    r["is_best_bet"] = True
+            else:
+                r["is_best_bet"] = False
+
+            out.append(r)
+
+        out.sort(
+            key=lambda x: (
+                0 if x.get("is_best_bet") else 1,
+                -float(self._safe_float(x.get("buy_score", 0.0), 0.0)),
+                -float(self._safe_float(x.get("score", 0.0), 0.0)),
+            )
+        )
+        return out
+
+    # ===== 内部共通: AI予想 =====
     def _predict_with_fallback(
         self,
         *,
@@ -525,20 +426,17 @@ class RaceController:
         venue_code: int,
         base_entries: List[Dict[str, Any]],
         beforeinfo: Dict[str, Any],
-        enriched_entries: Optional[List[Dict[str, Any]]],
+        enriched_entries: List[Dict[str, Any]] | None,
         top_n: int,
         with_odds: bool,
     ) -> List[Dict[str, Any]]:
         if not self._is_valid_6boats(base_entries):
             return []
 
-        stronger_entries = self._build_stronger_enriched_entries(
-            base_entries=base_entries,
-            beforeinfo=beforeinfo,
-            enriched_entries=enriched_entries,
-        )
+        use_entries = base_entries
+        if enriched_entries and self._is_valid_6boats(enriched_entries):
+            use_entries = enriched_entries
 
-        use_entries = stronger_entries if self._is_valid_6boats(stronger_entries) else base_entries
         ai_entries = self._to_ai_entries(use_entries, beforeinfo)
         if not self._is_valid_6boats(ai_entries):
             return []
@@ -548,13 +446,13 @@ class RaceController:
         odds_map = None
         if with_odds:
             try:
-                raw_odds = self._fetch_odds(race_no, date, venue_code)
+                raw_odds = fetch_odds(race_no, date, venue_code=venue_code)
                 odds_map = self._flat_odds_map(raw_odds)
             except Exception:
                 odds_map = None
 
         try:
-            return self.ai_predictor.predict_race(
+            ai_preds = self.ai_predictor.predict_race(
                 date=date,
                 venue=venue_name,
                 race_no=race_no,
@@ -563,11 +461,13 @@ class RaceController:
                 wind_dir=weather_set["wind_dir"],
                 wind_speed_mps=weather_set["wind_speed_mps"],
                 wave_cm=weather_set["wave_cm"],
-                top_n=top_n,
+                top_n=120,
                 odds_map=odds_map,
             )
         except Exception:
             return []
+
+        return self._apply_buy_selection(ai_preds, top_n=top_n)
 
     # ===== AI予想 =====
     def get_ai_predictions_marugame(
