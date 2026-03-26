@@ -4,10 +4,9 @@ pandas
 numpy
 scikit-learn
 lightgbm
-catboost   ← これ追加
+catboost
 requests
 beautifulsoup4
 lxml
 joblib
 selenium
-catboost
