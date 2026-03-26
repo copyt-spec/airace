@@ -69,6 +69,15 @@
       border-color: rgba(90,140,255,0.35);
     }
 
+    .toolbar{
+      display:flex;
+      justify-content:space-between;
+      align-items:center;
+      gap:10px;
+      margin: 0 0 10px;
+      flex-wrap:wrap;
+    }
+
     .grid{
       display:grid;
       grid-template-columns: 2.4fr 0.55fr;
@@ -121,9 +130,9 @@
     .lane-5{ background:#f9a825; color:#111; }
     .lane-6{ background:#2e7d32; color:#fff; }
 
-    .ranklist{display:flex;flex-direction:column;gap:3px;}
+    .ranklist{display:flex;flex-direction:column;gap:6px;}
     .rankitem{
-      display:flex;align-items:center;justify-content:space-between;gap:4px;
+      display:flex;align-items:center;justify-content:space-between;gap:6px;
       padding: 6px 7px;border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.10);background: rgba(0,0,0,0.14);
     }
@@ -152,7 +161,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 105px;
-      font-size: 11px;
+      font-size: 12px;
     }
     .rightbox{display:flex; flex-direction:column; align-items:flex-end; gap:1px;}
     .pval{font-family: var(--mono); font-weight: 900; font-size: 12px;}
@@ -191,14 +200,14 @@
       overflow:auto;
     }
     .oddrow{
-      display:grid;
-      grid-template-columns: 33px 1fr 35px 40px;
-      gap: 3x;
-      align-items:center;
-      padding: 4px 0;
-      border-bottom: 1px dashed rgba(255,255,255,0.10);
-      font-size: 10px;
-      min-width:0;
+        display:grid;
+        grid-template-columns: 33px 1fr 35px 40px;
+        gap: 3x;
+        align-items:center;
+        padding: 4px 0;
+        border-bottom: 1px dashed rgba(255,255,255,0.10);
+        font-size: 10px;
+        min-width:0;
     }
     .oddrow:last-child{border-bottom:none}
     .oddcombo{font-family: var(--mono); font-weight: 900; white-space:nowrap;}
@@ -280,11 +289,32 @@
     {% for r in races %}
       {% set rn = r.get("race_no") %}
       <a class="racebtn {{ 'active' if rn == selected_race else '' }}"
-         href="?date={{ date }}&race={{ rn }}&mode=full">
+         href="?date={{ date }}&race={{ rn }}">
         {{ rn }}R
       </a>
     {% endfor %}
   </div>
+
+  {% if selected_race and selected_race > 0 %}
+    <div class="toolbar">
+      <div class="tiny muted">
+        {% if mode == "full" %}
+          フル表示中（オッズ / AI / EV）
+        {% else %}
+          軽量表示中（出走表のみ）
+        {% endif %}
+      </div>
+      {% if mode != "full" %}
+        <a class="pill" href="?date={{ date }}&race={{ selected_race }}&mode=full">
+          オッズ・AI表示
+        </a>
+      {% else %}
+        <a class="pill" href="?date={{ date }}&race={{ selected_race }}">
+          軽量表示に戻す
+        </a>
+      {% endif %}
+    </div>
+  {% endif %}
 
   {% set ns = namespace(entries=[]) %}
   {% for r in races %}
@@ -460,6 +490,7 @@
           </div>
         </div>
 
+        {% if mode == "full" %}
         <div class="card">
           <div class="hd">
             <div class="ttl">三連単 120通り（6列固定）</div>
@@ -522,12 +553,13 @@
             {% endif %}
           </div>
         </div>
+        {% endif %}
 
       </div>
 
       <div class="sideStack">
 
-        {% if best_bets is defined %}
+        {% if mode == "full" and best_bets is defined %}
         <div class="card">
           <div class="hd">
             <div class="ttl">最強の買い目</div>
@@ -564,6 +596,7 @@
         </div>
         {% endif %}
 
+        {% if mode == "full" %}
         <div class="card">
           <div class="hd">
             <div class="ttl">AIサマリー</div>
@@ -709,6 +742,7 @@
             {% endif %}
           </div>
         </div>
+        {% endif %}
 
       </div>
 

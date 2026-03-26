@@ -19,6 +19,9 @@ except Exception as e:
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 
+# =========================
+# 基本ユーティリティ
+# =========================
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
         if x is None or x == "":
@@ -133,6 +136,7 @@ def _debug_render_log(
     venue: str,
     date: str,
     race_no: int,
+    mode: str | None,
     entries: List[Dict[str, Any]],
     grouped_odds: Dict[str, Any],
     best_bets: List[Dict[str, Any]],
@@ -145,6 +149,7 @@ def _debug_render_log(
     print("[DEBUG] venue         :", venue)
     print("[DEBUG] date          :", date)
     print("[DEBUG] selected_race :", race_no)
+    print("[DEBUG] mode          :", mode)
     print("[DEBUG] entries_len   :", len(entries))
     print("[DEBUG] best_bets_len :", len(best_bets))
     print("[DEBUG] probabilities :", len(probabilities))
@@ -167,6 +172,43 @@ def _debug_render_log(
     print("[DEBUG] nonzero_probs :", nonzero_probs)
 
 
+# =========================
+# venue別 entries
+# =========================
+def _get_entries_and_beforeinfo(controller: RaceController, venue: str, date: str, race_no: int):
+    if venue == "戸田":
+        entries = controller.get_entries_toda_race(date, race_no)
+        entries = controller.enrich_entries_toda(entries, date=date, race_no=race_no)
+        beforeinfo = controller.get_beforeinfo_only_toda(race_no=race_no, date=date)
+    elif venue == "児島":
+        entries = controller.get_entries_kojima_race(date, race_no)
+        entries = controller.enrich_entries_kojima(entries, date=date, race_no=race_no)
+        beforeinfo = controller.get_beforeinfo_only_kojima(race_no=race_no, date=date)
+    else:
+        entries = controller.get_entries_race(date, race_no)
+        entries = controller.enrich_entries_marugame(entries, date=date, race_no=race_no)
+        beforeinfo = controller.get_beforeinfo_only(race_no=race_no, date=date)
+
+    return [dict(e) for e in entries], beforeinfo
+
+
+def _get_full_bundle(controller: RaceController, venue: str, date: str, race_no: int):
+    if venue == "戸田":
+        grouped_odds = controller.get_odds_only_toda(race_no=race_no, date=date)
+        bundle = controller.get_ai_prediction_bundle_toda(date, race_no, top_n=20, with_odds=True)
+    elif venue == "児島":
+        grouped_odds = controller.get_odds_only_kojima(race_no=race_no, date=date)
+        bundle = controller.get_ai_prediction_bundle_kojima(date, race_no, top_n=20, with_odds=True)
+    else:
+        grouped_odds = controller.get_odds_only(race_no=race_no, date=date)
+        bundle = controller.get_ai_prediction_bundle_marugame(date, race_no, top_n=20, with_odds=True)
+
+    return grouped_odds, (bundle or {})
+
+
+# =========================
+# メイン描画
+# =========================
 def _render(venue: str):
     if RaceController is None:
         return "RaceController import error", 500
@@ -189,41 +231,30 @@ def _render(venue: str):
     race_no = int(race_str)
 
     try:
-        if venue == "戸田":
-            entries = controller.get_entries_toda_race(date, race_no)
-            entries = controller.enrich_entries_toda(entries, date=date, race_no=race_no)
-            beforeinfo = controller.get_beforeinfo_only_toda(race_no=race_no, date=date)
-            grouped_odds = controller.get_odds_only_toda(race_no=race_no, date=date)
-            bundle = controller.get_ai_prediction_bundle_toda(date, race_no, top_n=20, with_odds=True)
-        elif venue == "児島":
-            entries = controller.get_entries_kojima_race(date, race_no)
-            entries = controller.enrich_entries_kojima(entries, date=date, race_no=race_no)
-            beforeinfo = controller.get_beforeinfo_only_kojima(race_no=race_no, date=date)
-            grouped_odds = controller.get_odds_only_kojima(race_no=race_no, date=date)
-            bundle = controller.get_ai_prediction_bundle_kojima(date, race_no, top_n=20, with_odds=True)
-        else:
-            entries = controller.get_entries_race(date, race_no)
-            entries = controller.enrich_entries_marugame(entries, date=date, race_no=race_no)
-            beforeinfo = controller.get_beforeinfo_only(race_no=race_no, date=date)
-            grouped_odds = controller.get_odds_only(race_no=race_no, date=date)
-            bundle = controller.get_ai_prediction_bundle_marugame(date, race_no, top_n=20, with_odds=True)
+        # まずは常に軽い処理だけ
+        entries, beforeinfo = _get_entries_and_beforeinfo(controller, venue, date, race_no)
 
-        entries = [dict(e) for e in entries]
-        bundle = bundle or {}
+        grouped_odds: Dict[str, Any] = {}
+        best_bets: List[Dict[str, Any]] = []
+        probabilities: Dict[str, float] = {}
+        ev_result: Dict[str, float] = {}
 
-        best_bets = bundle.get("best_bets", []) or []
+        # mode=full の時だけ重い処理
+        if mode == "full":
+            grouped_odds, bundle = _get_full_bundle(controller, venue, date, race_no)
 
-        raw_prob_map = bundle.get("prob_map", {}) or {}
-        probabilities = _complete_probabilities(raw_prob_map)
+            raw_prob_map = bundle.get("prob_map", {}) or {}
+            probabilities = _complete_probabilities(raw_prob_map)
 
-        raw_odds_map = bundle.get("odds_map", {}) or {}
-        grouped_flat_odds = _grouped_odds_to_flat_map(grouped_odds)
+            raw_odds_map = bundle.get("odds_map", {}) or {}
+            grouped_flat_odds = _grouped_odds_to_flat_map(grouped_odds)
 
-        merged_odds_map = dict(grouped_flat_odds)
-        merged_odds_map.update(raw_odds_map)
-        odds_map = _complete_odds_map(merged_odds_map)
+            merged_odds_map = dict(grouped_flat_odds)
+            merged_odds_map.update(raw_odds_map)
+            odds_map = _complete_odds_map(merged_odds_map)
 
-        ev_result = _build_ev_map_from_prob_and_odds(probabilities, odds_map)
+            ev_result = _build_ev_map_from_prob_and_odds(probabilities, odds_map)
+            best_bets = bundle.get("best_bets", []) or []
 
         races = _blank_races()
         races[race_no - 1]["entries"] = entries
@@ -232,6 +263,7 @@ def _render(venue: str):
             venue=venue,
             date=date,
             race_no=race_no,
+            mode=mode,
             entries=entries,
             grouped_odds=grouped_odds,
             best_bets=best_bets,
@@ -262,6 +294,7 @@ def _render(venue: str):
         print("venue:", venue)
         print("date :", date)
         print("race :", race_no)
+        print("mode :", mode)
         traceback.print_exc()
 
         return render_template(
@@ -279,6 +312,9 @@ def _render(venue: str):
         )
 
 
+# =========================
+# ルート
+# =========================
 @app.route("/")
 def home():
     return render_template("home.html", date=_today())
