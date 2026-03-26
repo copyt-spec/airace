@@ -9,8 +9,8 @@ from engine.odds_fetcher import fetch_odds
 from engine.beforeinfo_fetcher import fetch_beforeinfo
 from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
 from engine.racelist_enricher import enrich_entries_with_racelist
-from engine.render_ai_predictor import RenderAIPredictor
 from engine.buy_selector import select_best_bets
+from engine.model_loader_catboost_binary import BinaryCatBoostVenueModel
 
 JCD_MARUGAME = 15
 JCD_TODA = 2
@@ -19,7 +19,10 @@ JCD_KOJIMA = 16
 
 class RaceController:
     def __init__(self) -> None:
-        self.ai_predictor = RenderAIPredictor()
+        self.binary_model = BinaryCatBoostVenueModel(
+            model_dir="data/models",
+            debug=False,
+        )
 
     # ===== 一覧用 =====
     def get_all_entries(self, date: str) -> List[Dict[str, Any]]:
@@ -59,6 +62,16 @@ class RaceController:
         if s in {"A1", "A2", "B1", "B2"}:
             return s
         return ""
+
+    def _normalize_venue_name(self, venue_name: str) -> str:
+        v = str(venue_name or "").strip()
+        if "丸亀" in v:
+            return "丸亀"
+        if "戸田" in v:
+            return "戸田"
+        if "児島" in v:
+            return "児島"
+        return v
 
     def _dedupe_by_lane(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         lane_map: Dict[int, Dict[str, Any]] = {}
@@ -289,13 +302,15 @@ class RaceController:
             ),
         }
 
-    # ===== AI入力用変換 =====
     def _to_ai_entries(
         self,
         entries: List[Dict[str, Any]],
         beforeinfo: Dict[str, Any] | None = None,
+        venue_name: str = "",
     ) -> List[Dict[str, Any]]:
         before_lane_map = self._normalize_beforeinfo(beforeinfo or {})
+        venue_name = self._normalize_venue_name(venue_name)
+
         ai_entries: List[Dict[str, Any]] = []
 
         for row in entries:
@@ -320,40 +335,18 @@ class RaceController:
                     0,
                 ),
                 "exhibit": self._safe_float(
-                    self._pick(
-                        row,
-                        ["exhibit", "tenji_time", "展示タイム"],
-                        before_row.get("exhibit", 0.0),
-                    ),
+                    self._pick(row, ["exhibit", "tenji_time", "展示タイム"], before_row.get("exhibit", 0.0)),
                     before_row.get("exhibit", 0.0),
                 ),
                 "st": self._safe_float(
-                    self._pick(
-                        row,
-                        ["st", "avg_st", "ST", "平均ST", "start_timing"],
-                        before_row.get("st", 0.0),
-                    ),
+                    self._pick(row, ["st", "avg_st", "ST", "平均ST", "start_timing"], before_row.get("st", 0.0)),
                     before_row.get("st", 0.0),
                 ),
-                "win_rate": self._safe_float(
-                    self._pick(row, ["win_rate", "nation_win_rate", "全国勝率"], 0.0),
-                    0.0,
-                ),
-                "place_rate": self._safe_float(
-                    self._pick(
-                        row,
-                        ["place_rate", "nation_place_rate", "two_rate", "全国2連対率", "quinella_rate"],
-                        0.0,
-                    ),
-                    0.0,
-                ),
-                "age": self._safe_int(self._pick(row, ["age", "年齢"], 0), 0),
-                "weight": self._safe_float(self._pick(row, ["weight", "体重"], 0.0), 0.0),
-                "grade": self._normalize_grade(self._pick(row, ["grade", "class", "級別"], "")),
                 "course": self._safe_int(
                     self._pick(row, ["course", "進入", "course_no"], before_row.get("course", lane)),
                     before_row.get("course", lane),
                 ),
+                "venue": venue_name,
             }
 
             ai_entries.append(ai_row)
@@ -362,62 +355,114 @@ class RaceController:
         ai_entries.sort(key=lambda x: x["lane"])
         return ai_entries
 
-    def _apply_buy_selection(
+    def _build_df120_from_ai_entries(
         self,
-        ai_preds: List[Dict[str, Any]],
+        ai_entries: List[Dict[str, Any]],
+        venue_name: str,
+        date: str,
+        race_no: int,
+        weather_set: Dict[str, Any],
+    ) -> List[Dict[str, Any]]:
+        if not self._is_valid_6boats(ai_entries):
+            return []
+
+        lane_map = {int(x["lane"]): x for x in ai_entries}
+        rows: List[Dict[str, Any]] = []
+
+        for a in range(1, 7):
+            for b in range(1, 7):
+                if b == a:
+                    continue
+                for c in range(1, 7):
+                    if c == a or c == b:
+                        continue
+
+                    combo = f"{a}-{b}-{c}"
+
+                    row: Dict[str, Any] = {
+                        "race_key": f"{venue_name}_{date}_{race_no}",
+                        "date": date,
+                        "venue": venue_name,
+                        "venue_code": (
+                            JCD_MARUGAME if venue_name == "丸亀"
+                            else JCD_TODA if venue_name == "戸田"
+                            else JCD_KOJIMA
+                        ),
+                        "race_no": race_no,
+                        "combo": combo,
+                        "combo_first_lane": a,
+                        "combo_second_lane": b,
+                        "combo_third_lane": c,
+                        "wave_cm": self._safe_float(weather_set.get("wave_cm", 0.0), 0.0),
+                        "weather": str(weather_set.get("weather", "") or ""),
+                        "wind_dir": str(weather_set.get("wind_dir", "") or ""),
+                        "wind_speed_mps": self._safe_float(weather_set.get("wind_speed_mps", 0.0), 0.0),
+                    }
+
+                    for lane in range(1, 7):
+                        src = lane_map[lane]
+                        row[f"lane{lane}_boat"] = self._safe_int(src.get("boat", 0), 0)
+                        row[f"lane{lane}_course"] = self._safe_int(src.get("course", lane), lane)
+                        row[f"lane{lane}_exhibit"] = self._safe_float(src.get("exhibit", 0.0), 0.0)
+                        row[f"lane{lane}_motor"] = self._safe_int(src.get("motor", 0), 0)
+                        row[f"lane{lane}_racer_no"] = self._safe_int(src.get("racer_no", 0), 0)
+                        row[f"lane{lane}_st"] = self._safe_float(src.get("st", 0.0), 0.0)
+
+                    rows.append(row)
+
+        return rows
+
+    def _prob_map_to_rows(
+        self,
+        prob_map: Dict[str, float],
+        odds_map: Dict[str, float] | None = None,
+    ) -> List[Dict[str, Any]]:
+        rows: List[Dict[str, Any]] = []
+
+        for combo, prob in prob_map.items():
+            odds = 0.0
+            if odds_map:
+                odds = self._safe_float(odds_map.get(combo, 0.0), 0.0)
+
+            rows.append({
+                "combo": str(combo),
+                "score": float(prob),
+                "prob": float(prob),
+                "odds": float(odds),
+            })
+
+        return rows
+    def _select_best_bets(
+        self,
+        prob_map: Dict[str, float],
+        odds_map: Dict[str, float] | None = None,
         *,
         top_n: int = 5,
+        venue_name: str = "",
     ) -> List[Dict[str, Any]]:
+        ai_preds = self._prob_map_to_rows(prob_map, odds_map=odds_map)
+
         best_bets = select_best_bets(
             ai_preds,
-            min_prob=0.03,
-            max_odds_cap=40.0,
-            max_ev_cap=2.2,
             top_n=top_n,
-            weight_prob=0.60,
-            weight_ev=0.25,
-            weight_odds=0.15,
+            venue=venue_name,
         )
 
         if not best_bets:
-            return ai_preds
+            fallback = sorted(
+                ai_preds,
+                key=lambda x: float(x.get("score", 0.0)),
+                reverse=True,
+            )[:top_n]
+            for i, r in enumerate(fallback, start=1):
+                r["buy_rank"] = i
+                r["buy_score"] = float(r.get("score", 0.0))
+                r["is_best_bet"] = True
+            return fallback
 
-        best_bet_map = {str(r.get("combo", "")).strip(): r for r in best_bets}
-        buy_rank_map = {str(r.get("combo", "")).strip(): i + 1 for i, r in enumerate(best_bets)}
+        return best_bets
 
-        out: List[Dict[str, Any]] = []
-        for row in ai_preds:
-            r = dict(row)
-            combo = str(r.get("combo", "")).strip()
-
-            if combo in buy_rank_map:
-                selected = best_bet_map.get(combo)
-                if selected:
-                    r["buy_score"] = selected.get("buy_score", 0.0)
-                    r["prob_norm"] = selected.get("prob_norm", 0.0)
-                    r["ev_norm"] = selected.get("ev_norm", 0.0)
-                    r["odds_norm"] = selected.get("odds_norm", 0.0)
-                    r["odds_capped"] = selected.get("odds_capped", 0.0)
-                    r["ev_capped"] = selected.get("ev_capped", 0.0)
-                    r["prob"] = selected.get("prob", 0.0)
-                    r["buy_rank"] = buy_rank_map[combo]
-                    r["is_best_bet"] = True
-            else:
-                r["is_best_bet"] = False
-
-            out.append(r)
-
-        out.sort(
-            key=lambda x: (
-                0 if x.get("is_best_bet") else 1,
-                -float(self._safe_float(x.get("buy_score", 0.0), 0.0)),
-                -float(self._safe_float(x.get("score", 0.0), 0.0)),
-            )
-        )
-        return out
-
-    # ===== 内部共通: AI予想 =====
-    def _predict_with_fallback(
+    def _predict_bundle(
         self,
         *,
         date: str,
@@ -429,47 +474,69 @@ class RaceController:
         enriched_entries: List[Dict[str, Any]] | None,
         top_n: int,
         with_odds: bool,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
+        out = {
+            "best_bets": [],
+            "prob_map": {},
+            "odds_map": {},
+            "df120_rows": [],
+        }
+
         if not self._is_valid_6boats(base_entries):
-            return []
+            return out
 
         use_entries = base_entries
         if enriched_entries and self._is_valid_6boats(enriched_entries):
             use_entries = enriched_entries
 
-        ai_entries = self._to_ai_entries(use_entries, beforeinfo)
+        ai_entries = self._to_ai_entries(use_entries, beforeinfo, venue_name=venue_name)
         if not self._is_valid_6boats(ai_entries):
-            return []
+            return out
 
         weather_set = self._extract_weather_set(beforeinfo)
 
-        odds_map = None
+        df120_rows = self._build_df120_from_ai_entries(
+            ai_entries=ai_entries,
+            venue_name=venue_name,
+            date=date,
+            race_no=race_no,
+            weather_set=weather_set,
+        )
+        if not df120_rows or len(df120_rows) != 120:
+            return out
+
+        import pandas as pd
+        df120 = pd.DataFrame(df120_rows)
+
+        odds_map: Dict[str, float] = {}
         if with_odds:
             try:
                 raw_odds = fetch_odds(race_no, date, venue_code=venue_code)
                 odds_map = self._flat_odds_map(raw_odds)
             except Exception:
-                odds_map = None
+                odds_map = {}
 
         try:
-            ai_preds = self.ai_predictor.predict_race(
-                date=date,
-                venue=venue_name,
-                race_no=race_no,
-                entries=ai_entries,
-                weather=weather_set["weather"],
-                wind_dir=weather_set["wind_dir"],
-                wind_speed_mps=weather_set["wind_speed_mps"],
-                wave_cm=weather_set["wave_cm"],
-                top_n=120,
-                odds_map=odds_map,
-            )
+            prob_map = self.binary_model.predict_proba(df120, venue_name)
         except Exception:
-            return []
+            prob_map = {}
 
-        return self._apply_buy_selection(ai_preds, top_n=top_n)
+        if not prob_map:
+            return out
 
-    # ===== AI予想 =====
+        best_bets = self._select_best_bets(
+            prob_map=prob_map,
+            odds_map=odds_map,
+            top_n=top_n,
+        )
+
+        out["best_bets"] = best_bets
+        out["prob_map"] = prob_map
+        out["odds_map"] = odds_map
+        out["df120_rows"] = df120_rows
+        return out
+
+    # ===== 旧互換: best_betsだけ返す =====
     def get_ai_predictions_marugame(
         self,
         date: str,
@@ -477,10 +544,41 @@ class RaceController:
         top_n: int = 20,
         with_odds: bool = True,
     ) -> List[Dict[str, Any]]:
+        bundle = self.get_ai_prediction_bundle_marugame(date, race_no, top_n=top_n, with_odds=with_odds)
+        return bundle.get("best_bets", [])
+
+    def get_ai_predictions_toda(
+        self,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+    ) -> List[Dict[str, Any]]:
+        bundle = self.get_ai_prediction_bundle_toda(date, race_no, top_n=top_n, with_odds=with_odds)
+        return bundle.get("best_bets", [])
+
+    def get_ai_predictions_kojima(
+        self,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+    ) -> List[Dict[str, Any]]:
+        bundle = self.get_ai_prediction_bundle_kojima(date, race_no, top_n=top_n, with_odds=with_odds)
+        return bundle.get("best_bets", [])
+
+    # ===== 新API: full bundle =====
+    def get_ai_prediction_bundle_marugame(
+        self,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+    ) -> Dict[str, Any]:
         try:
             base_entries = self.get_entries_race(date, race_no)
         except Exception:
-            return []
+            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
 
         try:
             enriched_entries = self.enrich_entries_marugame(base_entries, date, race_no)
@@ -493,7 +591,7 @@ class RaceController:
         except Exception:
             beforeinfo = {}
 
-        return self._predict_with_fallback(
+        return self._predict_bundle(
             date=date,
             race_no=race_no,
             venue_name="丸亀",
@@ -505,17 +603,17 @@ class RaceController:
             with_odds=with_odds,
         )
 
-    def get_ai_predictions_toda(
+    def get_ai_prediction_bundle_toda(
         self,
         date: str,
         race_no: int,
         top_n: int = 20,
         with_odds: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         try:
             base_entries = self.get_entries_toda_race(date, race_no)
         except Exception:
-            return []
+            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
 
         try:
             enriched_entries = self.enrich_entries_toda(base_entries, date, race_no)
@@ -528,7 +626,7 @@ class RaceController:
         except Exception:
             beforeinfo = {}
 
-        return self._predict_with_fallback(
+        return self._predict_bundle(
             date=date,
             race_no=race_no,
             venue_name="戸田",
@@ -540,17 +638,17 @@ class RaceController:
             with_odds=with_odds,
         )
 
-    def get_ai_predictions_kojima(
+    def get_ai_prediction_bundle_kojima(
         self,
         date: str,
         race_no: int,
         top_n: int = 20,
         with_odds: bool = True,
-    ) -> List[Dict[str, Any]]:
+    ) -> Dict[str, Any]:
         try:
             base_entries = self.get_entries_kojima_race(date, race_no)
         except Exception:
-            return []
+            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
 
         try:
             enriched_entries = self.enrich_entries_kojima(base_entries, date, race_no)
@@ -563,7 +661,7 @@ class RaceController:
         except Exception:
             beforeinfo = {}
 
-        return self._predict_with_fallback(
+        return self._predict_bundle(
             date=date,
             race_no=race_no,
             venue_name="児島",

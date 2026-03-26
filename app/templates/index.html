@@ -121,9 +121,9 @@
     .lane-5{ background:#f9a825; color:#111; }
     .lane-6{ background:#2e7d32; color:#fff; }
 
-    .ranklist{display:flex;flex-direction:column;gap:6px;}
+    .ranklist{display:flex;flex-direction:column;gap:3px;}
     .rankitem{
-      display:flex;align-items:center;justify-content:space-between;gap:6px;
+      display:flex;align-items:center;justify-content:space-between;gap:4px;
       padding: 6px 7px;border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.10);background: rgba(0,0,0,0.14);
     }
@@ -152,7 +152,7 @@
       overflow: hidden;
       text-overflow: ellipsis;
       max-width: 105px;
-      font-size: 12px;
+      font-size: 11px;
     }
     .rightbox{display:flex; flex-direction:column; align-items:flex-end; gap:1px;}
     .pval{font-family: var(--mono); font-weight: 900; font-size: 12px;}
@@ -192,12 +192,12 @@
     }
     .oddrow{
       display:grid;
-      grid-template-columns: 44px 1fr 42px;
-      gap: 5px;
+      grid-template-columns: 33px 1fr 35px 40px;
+      gap: 3x;
       align-items:center;
-      padding: 5px 0;
+      padding: 4px 0;
       border-bottom: 1px dashed rgba(255,255,255,0.10);
-      font-size: 11px;
+      font-size: 10px;
       min-width:0;
     }
     .oddrow:last-child{border-bottom:none}
@@ -212,6 +212,7 @@
       font-size: 11px;
     }
     .oddp{font-family: var(--mono); text-align:right; font-weight: 900; font-size: 11px;}
+    .oddev{font-family: var(--mono); text-align:right; font-size: 10px;}
 
     .warn{
       padding: 10px 12px;border-radius: 12px;
@@ -304,27 +305,8 @@
   {% set go = {} %}
   {% if grouped_odds is defined and grouped_odds %}
     {% set go = grouped_odds %}
-  {% elif odds is defined and odds %}
-    {% set go = odds %}
   {% endif %}
   {% set godata = go.get('data') if go else {} %}
-
-  {% set pred_rows = preds if preds is defined and preds else [] %}
-
-  {% set display_best_bets = [] %}
-  {% if best_bets is defined and best_bets %}
-    {% set display_best_bets = best_bets %}
-  {% elif pred_rows %}
-    {% set best_ns = namespace(rows=[]) %}
-    {% for p in pred_rows %}
-      {% if p.get("is_best_bet") %}
-        {% set best_ns.rows = best_ns.rows + [p] %}
-      {% endif %}
-    {% endfor %}
-    {% if best_ns.rows %}
-      {% set display_best_bets = best_ns.rows | sort(attribute='buy_rank') %}
-    {% endif %}
-  {% endif %}
 
   {% macro get_odd_from_grouped(combo_str, godata) -%}
     {%- if not godata -%}{%- else -%}
@@ -342,6 +324,10 @@
       {%- endif -%}
     {%- endif -%}
   {%- endmacro %}
+
+  {% if error_message is defined and error_message %}
+    <div class="warn">{{ error_message }}</div>
+  {% endif %}
 
   {% if not selected_race or selected_race == 0 %}
     <div class="card">
@@ -366,104 +352,104 @@
           </div>
           <div class="bd">
 
-              <table>
-                <thead>
-                  <tr>
-                    <th class="center">枠</th>
-                    <th>選手</th>
-                    <th class="center">級</th>
-                    <th class="center">モ番</th>
-                    <th class="center">モ2連</th>
-                    <th class="center">艇番</th>
-                    <th class="center">艇2連</th>
-                    <th class="center">展示</th>
-                    <th class="center">ST</th>
-                    <th class="right">勝率</th>
-                    <th class="right">2連率</th>
-                  </tr>
-                </thead>
-                <tbody>
-                {% for e in ns.entries %}
-                  {% set lane = (e.get('lane') or 0) %}
-                  {% set bi = (bi_map.get(lane) if bi_map else {}) or (bi_map.get(lane|string) if bi_map else {}) %}
+            <table>
+              <thead>
+                <tr>
+                  <th class="center">枠</th>
+                  <th>選手</th>
+                  <th class="center">級</th>
+                  <th class="center">モ番</th>
+                  <th class="center">モ2連</th>
+                  <th class="center">艇番</th>
+                  <th class="center">艇2連</th>
+                  <th class="center">展示</th>
+                  <th class="center">ST</th>
+                  <th class="right">勝率</th>
+                  <th class="right">2連率</th>
+                </tr>
+              </thead>
+              <tbody>
+              {% for e in ns.entries %}
+                {% set lane = (e.get('lane') or 0) %}
+                {% set bi = (bi_map.get(lane) if bi_map else {}) or (bi_map.get(lane|string) if bi_map else {}) %}
 
-                  {% set nm = (e.get('name') or '') %}
-                  {% set br = (e.get('branch') or '') %}
-                  {% if (not nm) and (e.get('name_branch')) %}
-                    {% set nb = (e.get('name_branch') or '') %}
-                    {% set parts = nb.split(' ') %}
-                    {% if parts|length >= 2 %}
-                      {% set nm = parts[0] %}
-                      {% set br = parts[1] %}
-                    {% else %}
-                      {% set nm = nb %}
-                    {% endif %}
+                {% set nm = (e.get('name') or '') %}
+                {% set br = (e.get('branch') or '') %}
+                {% if (not nm) and (e.get('name_branch')) %}
+                  {% set nb = (e.get('name_branch') or '') %}
+                  {% set parts = nb.split(' ') %}
+                  {% if parts|length >= 2 %}
+                    {% set nm = parts[0] %}
+                    {% set br = parts[1] %}
+                  {% else %}
+                    {% set nm = nb %}
                   {% endif %}
-                  {% if not nm %}
-                    {% set nm = (e.get('racer') or e.get('racer_name') or e.get('racer_no') or '') %}
-                  {% endif %}
+                {% endif %}
+                {% if not nm %}
+                  {% set nm = (e.get('racer') or e.get('racer_name') or e.get('racer_no') or '') %}
+                {% endif %}
 
-                  {% set ex = (e.get('exhibit') or '') %}
-                  {% if (not ex) and bi %}
-                    {% set ex = (bi.get('exhibit_time') or bi.get('exhibit') or '') %}
-                  {% endif %}
+                {% set ex = (e.get('exhibit') or '') %}
+                {% if (not ex) and bi %}
+                  {% set ex = (bi.get('exhibit_time') or bi.get('exhibit') or '') %}
+                {% endif %}
 
-                  {% set st = (e.get('start_timing') or '') %}
-                  {% if (not st) and bi %}
-                    {% set st = (bi.get('st') or bi.get('start_timing') or '') %}
-                  {% endif %}
+                {% set st = (e.get('start_timing') or '') %}
+                {% if (not st) and bi %}
+                  {% set st = (bi.get('st') or bi.get('start_timing') or '') %}
+                {% endif %}
 
-                  {% set motor_no = (e.get('motor_no') or e.get('motor') or '') %}
-                  {% set boat_no  = (e.get('boat_no') or e.get('boat') or '') %}
+                {% set motor_no = (e.get('motor_no') or e.get('motor') or '') %}
+                {% set boat_no  = (e.get('boat_no') or e.get('boat') or '') %}
 
-                  {% set motor_rate = (
-                      e.get('motor_rate')
-                      or e.get('motor_2rate')
-                      or e.get('motor_two_rate')
-                      or e.get('motor_quinella_rate')
-                      or ''
-                  ) %}
+                {% set motor_rate = (
+                    e.get('motor_rate')
+                    or e.get('motor_2rate')
+                    or e.get('motor_two_rate')
+                    or e.get('motor_quinella_rate')
+                    or ''
+                ) %}
 
-                  {% set boat_rate = (
-                      e.get('boat_rate')
-                      or e.get('boat_2rate')
-                      or e.get('boat_two_rate')
-                      or e.get('boat_quinella_rate')
-                      or ''
-                  ) %}
+                {% set boat_rate = (
+                    e.get('boat_rate')
+                    or e.get('boat_2rate')
+                    or e.get('boat_two_rate')
+                    or e.get('boat_quinella_rate')
+                    or ''
+                ) %}
 
-                  <tr>
-                    <td class="center">
-                      <span class="laneBadge lane-{{ lane }}">{{ lane }}</span>
-                    </td>
+                <tr>
+                  <td class="center">
+                    <span class="laneBadge lane-{{ lane }}">{{ lane }}</span>
+                  </td>
 
-                    <td>
-                      <div style="display:flex; flex-direction:column; line-height:1.12;">
-                        <div style="display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;">
-                          <span style="font-weight:900;">{{ nm }}</span>
-                          {% if br %}<span class="tiny muted">{{ br }}</span>{% endif %}
-                        </div>
-                        <div class="tiny muted">
-                          登録 <span class="num">{{ e.get('racer_no','') }}</span>
-                          {% if e.get('grade') %} / {{ e.get('grade') }}{% endif %}
-                          {% if e.get('fl') %} / F/L: {{ e.get('fl') }}{% endif %}
-                        </div>
+                  <td>
+                    <div style="display:flex; flex-direction:column; line-height:1.12;">
+                      <div style="display:flex; gap:8px; align-items:baseline; flex-wrap:wrap;">
+                        <span style="font-weight:900;">{{ nm }}</span>
+                        {% if br %}<span class="tiny muted">{{ br }}</span>{% endif %}
                       </div>
-                    </td>
+                      <div class="tiny muted">
+                        登録 <span class="num">{{ e.get('racer_no','') }}</span>
+                        {% if e.get('grade') %} / {{ e.get('grade') }}{% endif %}
+                        {% if e.get('fl') %} / F/L: {{ e.get('fl') }}{% endif %}
+                      </div>
+                    </div>
+                  </td>
 
-                    <td class="center">{{ e.get('grade','') }}</td>
-                    <td class="center num">{{ motor_no }}</td>
-                    <td class="center num">{{ motor_rate }}</td>
-                    <td class="center num">{{ boat_no }}</td>
-                    <td class="center num">{{ boat_rate }}</td>
-                    <td class="center num">{{ ex }}</td>
-                    <td class="center num">{{ st }}</td>
-                    <td class="right num">{{ e.get('win_rate','') }}</td>
-                    <td class="right num">{{ e.get('quinella_rate','') }}</td>
-                  </tr>
-                {% endfor %}
-                </tbody>
-              </table>
+                  <td class="center">{{ e.get('grade','') }}</td>
+                  <td class="center num">{{ motor_no }}</td>
+                  <td class="center num">{{ motor_rate }}</td>
+                  <td class="center num">{{ boat_no }}</td>
+                  <td class="center num">{{ boat_rate }}</td>
+                  <td class="center num">{{ ex }}</td>
+                  <td class="center num">{{ st }}</td>
+                  <td class="right num">{{ e.get('win_rate','') }}</td>
+                  <td class="right num">{{ e.get('quinella_rate','') or e.get('place_rate','') }}</td>
+                </tr>
+              {% endfor %}
+              </tbody>
+            </table>
 
             {% if ns.entries|length == 0 %}
               <div class="warn">
@@ -476,8 +462,8 @@
 
         <div class="card">
           <div class="hd">
-            <div class="ttl">三連単 120通り（6列固定・横スクロール無し）</div>
-            <div class="tiny muted">odds + p%</div>
+            <div class="ttl">三連単 120通り（6列固定）</div>
+            <div class="tiny muted">odds + p% + EV</div>
           </div>
 
           <div class="bd">
@@ -487,7 +473,7 @@
                   <div class="oddsCol">
                     <div class="oddsColHd">
                       <span>1着 {{ a }}</span>
-                      <span class="tiny muted">2-3 / odds / p</span>
+                      <span class="tiny muted">2-3 / odds / p / EV</span>
                     </div>
                     <div class="oddsColBd">
                       {% set col = godata.get(a, {}) %}
@@ -500,13 +486,22 @@
                               {% if odd is none %}
                                 {% set odd = col.get(b|string ~ c|string) %}
                               {% endif %}
+                              {% set prob = probabilities.get(combo) if probabilities is defined and probabilities else none %}
+                              {% set evv = ev_result.get(combo) if ev_result is defined and ev_result else none %}
 
                               <div class="oddrow">
                                 <div class="oddcombo">{{ b }}-{{ c }}</div>
                                 <div class="oddval">{{ odd if odd is not none else "" }}</div>
                                 <div class="oddp">
-                                  {% if probabilities is defined and probabilities and probabilities.get(combo) is not none %}
-                                    {{ "%.2f"|format(probabilities.get(combo,0.0) * 100.0) }}
+                                  {% if prob is not none %}
+                                    {{ "%.2f"|format(prob * 100.0) }}
+                                  {% else %}
+                                    -
+                                  {% endif %}
+                                </div>
+                                <div class="oddev">
+                                  {% if evv is not none %}
+                                    {{ "%.2f"|format(evv) }}
                                   {% else %}
                                     -
                                   {% endif %}
@@ -532,15 +527,16 @@
 
       <div class="sideStack">
 
+        {% if best_bets is defined %}
         <div class="card">
           <div class="hd">
             <div class="ttl">最強の買い目</div>
             <div class="tiny muted">prob重視 + EV補正</div>
           </div>
           <div class="bd">
-            {% if display_best_bets and (display_best_bets|length > 0) %}
+            {% if best_bets and (best_bets|length > 0) %}
               <div class="ranklist">
-                {% for r in display_best_bets %}
+                {% for r in best_bets %}
                   <div class="rankitem">
                     <div class="rankleft">
                       <div class="rk">{{ r.get("buy_rank", loop.index) }}</div>
@@ -550,17 +546,10 @@
                     </div>
                     <div class="rightbox">
                       <div class="pval">S {{ "%.3f"|format(r.get("buy_score", 0.0)) }}</div>
-                      <div class="oval">
-                        odds
-                        {{
-                          "%.2f"|format(
-                            r.get("odds_raw", r.get("odds", 0.0)) or 0.0
-                          )
-                        }}
-                      </div>
+                      <div class="oval">odds {{ "%.2f"|format(r.get("odds_raw", r.get("odds", 0.0))) }}</div>
                       <div class="evval">
-                        p {{ "%.2f"|format((r.get("prob", r.get("score", 0.0)) or 0.0) * 100.0) }}%
-                        / EV {{ "%.2f"|format(r.get("ev_raw", r.get("ev", 0.0)) or 0.0) }}
+                        p {{ "%.2f"|format((r.get("prob", r.get("score", 0.0))) * 100.0) }}%
+                        / EV {{ "%.2f"|format(r.get("ev_raw", 0.0)) }}
                       </div>
                     </div>
                   </div>
@@ -573,6 +562,7 @@
             {% endif %}
           </div>
         </div>
+        {% endif %}
 
         <div class="card">
           <div class="hd">

@@ -14,6 +14,12 @@
   --muted: rgba(255,255,255,0.70);
   --shadow: 0 30px 90px rgba(0,0,0,0.55);
   --radius: 22px;
+  --okbg: rgba(120,255,176,0.14);
+  --okbd: rgba(120,255,176,0.28);
+  --warnbg: rgba(255,190,120,0.14);
+  --warnbd: rgba(255,190,120,0.28);
+  --errbg: rgba(255,120,160,0.14);
+  --errbd: rgba(255,120,160,0.28);
 }
 
 *{box-sizing:border-box;}
@@ -95,6 +101,18 @@ body{
   align-items:flex-end;
 }
 
+.inputbox{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.label{
+  font-size:12px;
+  color:var(--muted);
+  font-weight:700;
+}
+
 input[type="date"]{
   padding:10px 14px;
   border-radius:14px;
@@ -124,6 +142,11 @@ input[type="date"]{
 .btn-tertiary{
   background:linear-gradient(135deg,#9b8cff,#78d7ff);
   color:#071021;
+}
+.btn-ghost{
+  background:rgba(255,255,255,0.08);
+  color:var(--text);
+  border:1px solid var(--border);
 }
 
 .btn:hover{filter:brightness(1.1);}
@@ -163,6 +186,71 @@ input[type="date"]{
   background-image:
     linear-gradient(180deg, rgba(5,10,25,0.25), rgba(5,10,25,0.65)),
     url("/static/img/ai_fusion.jpg");
+}
+
+.keep-card{
+  margin-top:22px;
+  border-radius:18px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.04);
+  padding:18px;
+}
+
+.keep-title{
+  margin:0 0 8px;
+  font-size:16px;
+  font-weight:900;
+}
+
+.keep-sub{
+  margin:0 0 14px;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.7;
+}
+
+.keep-actions{
+  display:flex;
+  flex-wrap:wrap;
+  gap:10px;
+  margin-bottom:14px;
+}
+
+.keep-status{
+  padding:12px 14px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:rgba(0,0,0,0.18);
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.7;
+  white-space:pre-line;
+  min-height:84px;
+}
+
+.keep-status.ok{
+  background:var(--okbg);
+  border-color:var(--okbd);
+  color:var(--text);
+}
+
+.keep-status.warn{
+  background:var(--warnbg);
+  border-color:var(--warnbd);
+  color:var(--text);
+}
+
+.keep-status.err{
+  background:var(--errbg);
+  border-color:var(--errbd);
+  color:var(--text);
+}
+
+.keep-note{
+  margin-top:10px;
+  font-size:12px;
+  color:var(--muted);
+  line-height:1.7;
 }
 
 /* モバイル */
@@ -206,11 +294,35 @@ input[type="date"]{
       </p>
 
       <div class="controls">
-        <input id="dateInput" type="date">
+        <div class="inputbox">
+          <div class="label">日付</div>
+          <input id="dateInput" type="date">
+        </div>
 
         <button class="btn btn-primary" id="goMarugame">丸亀へ</button>
         <button class="btn btn-secondary" id="goToda">戸田へ</button>
         <button class="btn btn-tertiary" id="goKojima">児島へ</button>
+      </div>
+
+      <div class="keep-card">
+        <h3 class="keep-title">1時間キープ</h3>
+        <p class="keep-sub">
+          このページを開いたまま、5分ごとに <code>/ping</code> へアクセスします。<br>
+          対応ブラウザでは Wake Lock も試すので、ちょくちょく止まるのを抑えやすくなります。
+        </p>
+
+        <div class="keep-actions">
+          <button class="btn btn-primary" id="startKeepAliveBtn">1時間キープ開始</button>
+          <button class="btn btn-ghost" id="stopKeepAliveBtn">停止</button>
+        </div>
+
+        <div id="keepAliveStatus" class="keep-status">まだ開始していません。</div>
+
+        <div class="keep-note">
+          ・5分ごとに ping します<br>
+          ・1時間で自動停止します<br>
+          ・ブラウザやMac本体が完全にスリープした場合は維持できません
+        </div>
       </div>
     </div>
 
@@ -252,6 +364,142 @@ document.getElementById("goToda").onclick=()=>{
 document.getElementById("goKojima").onclick=()=>{
   window.location.href="/kojima?date="+toYmdCompact(input.value);
 };
+
+let keepAliveTimer = null;
+let stopTimer = null;
+let wakeLock = null;
+let startedAt = null;
+
+const KEEP_MS = 60 * 60 * 1000;   // 1時間
+const PING_MS = 5 * 60 * 1000;    // 5分
+
+const statusEl = document.getElementById("keepAliveStatus");
+const startBtn = document.getElementById("startKeepAliveBtn");
+const stopBtn = document.getElementById("stopKeepAliveBtn");
+
+function setStatus(message, cls=""){
+  statusEl.className = "keep-status" + (cls ? " " + cls : "");
+  statusEl.textContent = message;
+}
+
+async function acquireWakeLock(){
+  try{
+    if("wakeLock" in navigator && navigator.wakeLock.request){
+      wakeLock = await navigator.wakeLock.request("screen");
+      wakeLock.addEventListener("release", ()=>{
+        console.log("Wake Lock released");
+      });
+      return true;
+    }
+  }catch(err){
+    console.warn("Wake Lock error:", err);
+  }
+  return false;
+}
+
+async function sendPing(){
+  const res = await fetch("/ping", {
+    method: "GET",
+    cache: "no-store",
+    headers: {
+      "X-Keep-Alive": "1"
+    }
+  });
+  if(!res.ok){
+    throw new Error("ping failed: " + res.status);
+  }
+  return await res.json();
+}
+
+function stopKeepAlive(showMessage=true){
+  if(keepAliveTimer){
+    clearInterval(keepAliveTimer);
+    keepAliveTimer = null;
+  }
+  if(stopTimer){
+    clearTimeout(stopTimer);
+    stopTimer = null;
+  }
+  if(wakeLock){
+    wakeLock.release().catch(()=>{});
+    wakeLock = null;
+  }
+  startedAt = null;
+
+  if(showMessage){
+    setStatus("停止しました。", "warn");
+  }
+}
+
+async function startKeepAlive(){
+  stopKeepAlive(false);
+  startedAt = Date.now();
+
+  const wakeOk = await acquireWakeLock();
+
+  try{
+    const first = await sendPing();
+    setStatus(
+      "キープ開始しました。\n" +
+      "開始時刻: " + new Date(startedAt).toLocaleString() + "\n" +
+      "Wake Lock: " + (wakeOk ? "ON" : "未対応 or 取得失敗") + "\n" +
+      "最終 ping: " + (first.ts || "-"),
+      "ok"
+    );
+  }catch(err){
+    setStatus(
+      "開始時の ping に失敗しました。\n" +
+      "ローカルサーバーやネットワーク状態を確認してください。",
+      "err"
+    );
+    return;
+  }
+
+  keepAliveTimer = setInterval(async ()=>{
+    const elapsed = Date.now() - startedAt;
+    if(elapsed >= KEEP_MS){
+      stopKeepAlive(false);
+      setStatus("1時間経過したので自動停止しました。", "warn");
+      return;
+    }
+
+    try{
+      const data = await sendPing();
+      const remainMs = Math.max(0, KEEP_MS - elapsed);
+      const remainMin = Math.ceil(remainMs / 60000);
+
+      setStatus(
+        "キープ動作中です。\n" +
+        "Wake Lock: " + (wakeLock ? "ON" : "OFF") + "\n" +
+        "最終 ping: " + (data.ts || "-") + "\n" +
+        "残り: 約 " + remainMin + " 分",
+        "ok"
+      );
+    }catch(err){
+      setStatus(
+        "ping に失敗しましたが、次の周期で再試行します。\n" +
+        "サーバー停止やネットワーク状態を確認してください。",
+        "err"
+      );
+    }
+  }, PING_MS);
+
+  stopTimer = setTimeout(()=>{
+    stopKeepAlive(false);
+    setStatus("1時間経過したので自動停止しました。", "warn");
+  }, KEEP_MS);
+}
+
+document.addEventListener("visibilitychange", async ()=>{
+  if(document.visibilityState === "visible" && startedAt){
+    if(!wakeLock){
+      await acquireWakeLock();
+    }
+  }
+});
+
+startBtn.addEventListener("click", startKeepAlive);
+stopBtn.addEventListener("click", ()=>stopKeepAlive(true));
 </script>
 
 </body>
