@@ -4,6 +4,7 @@ pandas
 numpy
 scikit-learn
 lightgbm
+catboost   ← これ追加
 requests
 beautifulsoup4
 lxml
