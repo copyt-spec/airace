@@ -21,8 +21,17 @@
       --hot-line: rgba(255,184,77,0.35);
       --danger: rgba(255,120,160,0.14);
       --danger-line: rgba(255,120,160,0.22);
+
+      --ev-mid-bg: rgba(255,210,90,0.18);
+      --ev-mid-line: rgba(255,210,90,0.30);
+      --ev-hot-bg: rgba(120,220,140,0.22);
+      --ev-hot-line: rgba(120,220,140,0.35);
+      --ev-veryhot-bg: rgba(70,240,140,0.28);
+      --ev-veryhot-line: rgba(70,240,140,0.45);
     }
+
     *{box-sizing:border-box}
+
     body{
       margin:0;
       font-family: var(--sans);
@@ -34,33 +43,85 @@
         linear-gradient(180deg, var(--bg1), var(--bg2));
       min-height:100vh;
     }
+
     a{color:inherit;text-decoration:none}
 
-    .wrap{max-width: 1400px;margin: 0 auto;padding: 14px 12px 24px;}
+    .wrap{
+      max-width: 1400px;
+      margin: 0 auto;
+      padding: 14px 12px 24px;
+    }
 
-    .topbar{display:flex;align-items:center;justify-content:space-between;gap:12px;padding: 10px 2px 12px;}
-    .brand{display:flex;align-items:center;gap:10px;}
+    .topbar{
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:12px;
+      padding: 10px 2px 12px;
+    }
+
+    .brand{
+      display:flex;
+      align-items:center;
+      gap:10px;
+    }
+
     .logo{
-      width:34px;height:34px;border-radius:10px;
+      width:34px;
+      height:34px;
+      border-radius:10px;
       background: linear-gradient(135deg, rgba(90,140,255,0.95), rgba(255,120,160,0.90));
       box-shadow: 0 10px 26px rgba(90,140,255,0.20);
     }
+
     .titlebox{line-height:1.1}
-    .titlebox .h1{font-size: 15px;font-weight: 800;letter-spacing: .3px;}
-    .titlebox .sub{font-size: 12px;color: var(--muted);margin-top: 4px;}
-    .navbtns{display:flex; gap:8px; align-items:center; flex-wrap:wrap}
+    .titlebox .h1{
+      font-size: 15px;
+      font-weight: 800;
+      letter-spacing: .3px;
+    }
+    .titlebox .sub{
+      font-size: 12px;
+      color: var(--muted);
+      margin-top: 4px;
+    }
+
+    .navbtns{
+      display:flex;
+      gap:8px;
+      align-items:center;
+      flex-wrap:wrap;
+    }
+
     .pill{
-      padding: 8px 10px;border-radius: 999px;border: 1px solid var(--line);
-      background: rgba(255,255,255,0.04);font-size: 12px;color: rgba(255,255,255,0.88);
+      padding: 8px 10px;
+      border-radius: 999px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+      font-size: 12px;
+      color: rgba(255,255,255,0.88);
       backdrop-filter: blur(8px);
     }
     .pill:hover{background: rgba(255,255,255,0.08)}
 
-    .racebar{display:flex;gap:8px;flex-wrap:wrap;align-items:center;margin: 8px 0 12px;}
+    .racebar{
+      display:flex;
+      gap:8px;
+      flex-wrap:wrap;
+      align-items:center;
+      margin: 8px 0 12px;
+    }
+
     .racebtn{
-      display:inline-flex;align-items:center;justify-content:center;
-      padding: 8px 10px;border-radius: 12px;border: 1px solid var(--line);
-      background: rgba(255,255,255,0.04);font-size: 12px;min-width: 54px;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      padding: 8px 10px;
+      border-radius: 12px;
+      border: 1px solid var(--line);
+      background: rgba(255,255,255,0.04);
+      font-size: 12px;
+      min-width: 54px;
       box-shadow: 0 8px 18px rgba(0,0,0,0.18);
     }
     .racebtn:hover{background: rgba(255,255,255,0.08)}
@@ -84,11 +145,16 @@
       gap: 10px;
       align-items:start;
     }
+
     @media (max-width: 1100px){
       .grid{grid-template-columns: 1fr}
     }
 
-    .stack{display:flex; flex-direction:column; gap:10px;}
+    .stack{
+      display:flex;
+      flex-direction:column;
+      gap:10px;
+    }
 
     .card{
       background: linear-gradient(180deg, rgba(255,255,255,0.06), rgba(255,255,255,0.03));
@@ -97,19 +163,44 @@
       box-shadow: var(--shadow);
       overflow:hidden;
     }
+
     .card .hd{
-      display:flex;align-items:center;justify-content:space-between;gap: 10px;
-      padding: 9px 10px;background: rgba(0,0,0,0.18);border-bottom: 1px solid var(--line);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap: 10px;
+      padding: 9px 10px;
+      background: rgba(0,0,0,0.18);
+      border-bottom: 1px solid var(--line);
     }
-    .card .hd .ttl{font-size: 13px;font-weight: 800;letter-spacing: .2px;}
+
+    .card .hd .ttl{
+      font-size: 13px;
+      font-weight: 800;
+      letter-spacing: .2px;
+    }
+
     .card .bd{padding: 9px 10px;}
 
-    table{width:100%;border-collapse: collapse;}
+    table{
+      width:100%;
+      border-collapse: collapse;
+    }
+
     th, td{
       border-bottom: 1px solid rgba(255,255,255,0.08);
-      padding: 6px 6px;font-size: 12px;vertical-align: middle;
+      padding: 6px 6px;
+      font-size: 12px;
+      vertical-align: middle;
     }
-    th{ text-align:left;color: rgba(255,255,255,0.80);font-weight: 700;background: rgba(0,0,0,0.10); }
+
+    th{
+      text-align:left;
+      color: rgba(255,255,255,0.80);
+      font-weight: 700;
+      background: rgba(0,0,0,0.10);
+    }
+
     .num{font-family: var(--mono)}
     .muted{color: var(--muted)}
     .tiny{font-size: 11px; color: var(--muted)}
@@ -117,8 +208,13 @@
     .center{text-align:center}
 
     .laneBadge{
-      display:inline-flex;align-items:center;justify-content:center;
-      width: 30px;height: 22px;border-radius: 8px;font-weight: 900;
+      display:inline-flex;
+      align-items:center;
+      justify-content:center;
+      width: 30px;
+      height: 22px;
+      border-radius: 8px;
+      font-weight: 900;
       box-shadow: 0 8px 18px rgba(0,0,0,0.25);
       border: 1px solid rgba(255,255,255,0.18);
       font-family: var(--mono);
@@ -130,29 +226,66 @@
     .lane-5{ background:#f9a825; color:#111; }
     .lane-6{ background:#2e7d32; color:#fff; }
 
-    .ranklist{display:flex;flex-direction:column;gap:6px;}
+    .ranklist{
+      display:flex;
+      flex-direction:column;
+      gap:6px;
+    }
+
     .rankitem{
-      display:flex;align-items:center;justify-content:space-between;gap:6px;
-      padding: 6px 7px;border-radius: 12px;
-      border: 1px solid rgba(255,255,255,0.10);background: rgba(0,0,0,0.14);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:6px;
+      padding: 6px 7px;
+      border-radius: 12px;
+      border: 1px solid rgba(255,255,255,0.10);
+      background: rgba(0,0,0,0.14);
+    }
+
+    .rankitem.ev-good{
+      background: var(--good);
+      border-color: var(--good-line);
     }
     .rankitem.ev-hot{
       background: var(--hot);
       border-color: var(--hot-line);
     }
-    .rankitem.ev-good{
-      background: var(--good);
-      border-color: var(--good-line);
+    .rankitem.ev-mid{
+      background: var(--ev-mid-bg);
+      border-color: var(--ev-mid-line);
     }
-    .rankleft{display:flex; align-items:center; gap:6px; min-width:0;}
+    .rankitem.ev-green{
+      background: var(--ev-hot-bg);
+      border-color: var(--ev-hot-line);
+    }
+    .rankitem.ev-verygreen{
+      background: var(--ev-veryhot-bg);
+      border-color: var(--ev-veryhot-line);
+    }
+
+    .rankleft{
+      display:flex;
+      align-items:center;
+      gap:6px;
+      min-width:0;
+    }
+
     .rk{
-      width: 22px; height: 22px; border-radius: 8px;
-      display:flex; align-items:center; justify-content:center;
+      width: 22px;
+      height: 22px;
+      border-radius: 8px;
+      display:flex;
+      align-items:center;
+      justify-content:center;
       background: rgba(90,140,255,0.22);
       border: 1px solid rgba(90,140,255,0.30);
-      font-weight: 900; font-family: var(--mono); font-size: 12px;
+      font-weight: 900;
+      font-family: var(--mono);
+      font-size: 12px;
       flex: 0 0 auto;
     }
+
     .combo{
       font-family: var(--mono);
       font-weight: 900;
@@ -163,19 +296,42 @@
       max-width: 105px;
       font-size: 12px;
     }
-    .rightbox{display:flex; flex-direction:column; align-items:flex-end; gap:1px;}
-    .pval{font-family: var(--mono); font-weight: 900; font-size: 12px;}
-    .oval{font-family: var(--mono); font-size: 10px; color: rgba(255,255,255,0.82)}
-    .evval{font-family: var(--mono); font-size: 10px; color: rgba(255,255,255,0.90)}
+
+    .rightbox{
+      display:flex;
+      flex-direction:column;
+      align-items:flex-end;
+      gap:1px;
+    }
+
+    .pval{
+      font-family: var(--mono);
+      font-weight: 900;
+      font-size: 12px;
+    }
+
+    .oval{
+      font-family: var(--mono);
+      font-size: 10px;
+      color: rgba(255,255,255,0.82);
+    }
+
+    .evval{
+      font-family: var(--mono);
+      font-size: 10px;
+      color: rgba(255,255,255,0.90);
+    }
 
     .oddsGrid{
       display:grid;
       grid-template-columns: repeat(6, minmax(0,1fr));
       gap: 6px;
     }
+
     @media (max-width: 1100px){
       .oddsGrid{grid-template-columns: repeat(3, minmax(0,1fr));}
     }
+
     @media (max-width: 640px){
       .oddsGrid{grid-template-columns: repeat(2, minmax(0,1fr));}
     }
@@ -187,30 +343,45 @@
       overflow:hidden;
       min-width:0;
     }
+
     .oddsColHd{
-      display:flex;align-items:center;justify-content:space-between;gap:6px;
-      padding: 7px 7px;background: rgba(255,255,255,0.05);
+      display:flex;
+      align-items:center;
+      justify-content:space-between;
+      gap:6px;
+      padding: 7px 7px;
+      background: rgba(255,255,255,0.05);
       border-bottom: 1px solid rgba(255,255,255,0.10);
-      font-size: 11px;font-weight: 900;
+      font-size: 11px;
+      font-weight: 900;
       white-space:nowrap;
     }
+
     .oddsColBd{
       padding: 6px 7px;
       max-height: 520px;
       overflow:auto;
     }
+
     .oddrow{
-        display:grid;
-        grid-template-columns: 33px 1fr 35px 40px;
-        gap: 3x;
-        align-items:center;
-        padding: 4px 0;
-        border-bottom: 1px dashed rgba(255,255,255,0.10);
-        font-size: 10px;
-        min-width:0;
+      display:grid;
+      grid-template-columns: 33px 1fr 35px 40px;
+      gap: 3px;
+      align-items:center;
+      padding: 4px 0;
+      border-bottom: 1px dashed rgba(255,255,255,0.10);
+      font-size: 10px;
+      min-width:0;
     }
+
     .oddrow:last-child{border-bottom:none}
-    .oddcombo{font-family: var(--mono); font-weight: 900; white-space:nowrap;}
+
+    .oddcombo{
+      font-family: var(--mono);
+      font-weight: 900;
+      white-space:nowrap;
+    }
+
     .oddval{
       font-family: var(--mono);
       text-align:right;
@@ -220,11 +391,51 @@
       min-width:0;
       font-size: 11px;
     }
-    .oddp{font-family: var(--mono); text-align:right; font-weight: 900; font-size: 11px;}
-    .oddev{font-family: var(--mono); text-align:right; font-size: 10px;}
+
+    .oddp{
+      font-family: var(--mono);
+      text-align:right;
+      font-weight: 900;
+      font-size: 11px;
+    }
+
+    .oddev{
+      font-family: var(--mono);
+      text-align:right;
+      font-size: 10px;
+    }
+
+    .prob-veryhigh{
+      background: rgba(70,240,140,0.30);
+      border: 1px solid rgba(70,240,140,0.40);
+      border-radius: 6px;
+      padding: 1px 4px;
+    }
+
+    .prob-high{
+      background: rgba(120,220,140,0.24);
+      border: 1px solid rgba(120,220,140,0.32);
+      border-radius: 6px;
+      padding: 1px 4px;
+    }
+
+    .prob-mid{
+      background: rgba(255,210,90,0.22);
+      border: 1px solid rgba(255,210,90,0.30);
+      border-radius: 6px;
+      padding: 1px 4px;
+    }
+
+    .prob-low{
+      background: rgba(255,235,150,0.16);
+      border: 1px solid rgba(255,235,150,0.24);
+      border-radius: 6px;
+      padding: 1px 4px;
+    }
 
     .warn{
-      padding: 10px 12px;border-radius: 12px;
+      padding: 10px 12px;
+      border-radius: 12px;
       background: var(--danger);
       border: 1px solid var(--danger-line);
       color: rgba(255,255,255,0.92);
@@ -243,21 +454,32 @@
       grid-template-columns: 1fr 1fr;
       gap: 8px;
     }
+
     .summaryMini{
       padding: 8px 9px;
       border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.10);
       background: rgba(0,0,0,0.14);
     }
+
     .summaryMini .k{
       font-size:10px;
       color: var(--muted);
       margin-bottom: 3px;
     }
+
     .summaryMini .v{
       font-family: var(--mono);
       font-size:12px;
       font-weight: 900;
+    }
+
+    .footerNote{
+      margin-top:20px;
+      padding:12px;
+      text-align:center;
+      font-size:12px;
+      color:rgba(255,255,255,0.6);
     }
   </style>
 </head>
@@ -520,12 +742,26 @@
                               {% set prob = probabilities.get(combo) if probabilities is defined and probabilities else none %}
                               {% set evv = ev_result.get(combo) if ev_result is defined and ev_result else none %}
 
+                              {% set prob_pct = (prob * 100.0) if prob is not none else none %}
+                              {% set prob_class = "" %}
+                              {% if prob_pct is not none %}
+                                {% if prob_pct >= 15 %}
+                                  {% set prob_class = "prob-veryhigh" %}
+                                {% elif prob_pct >= 10 %}
+                                  {% set prob_class = "prob-high" %}
+                                {% elif prob_pct >= 5 %}
+                                  {% set prob_class = "prob-mid" %}
+                                {% elif prob_pct >= 3 %}
+                                  {% set prob_class = "prob-low" %}
+                                {% endif %}
+                              {% endif %}
+
                               <div class="oddrow">
                                 <div class="oddcombo">{{ b }}-{{ c }}</div>
                                 <div class="oddval">{{ odd if odd is not none else "" }}</div>
-                                <div class="oddp">
+                                <div class="oddp {{ prob_class }}">
                                   {% if prob is not none %}
-                                    {{ "%.2f"|format(prob * 100.0) }}
+                                    {{ "%.2f"|format(prob_pct) }}
                                   {% else %}
                                     -
                                   {% endif %}
@@ -563,13 +799,26 @@
         <div class="card">
           <div class="hd">
             <div class="ttl">最強の買い目</div>
-            <div class="tiny muted">prob重視 + EV補正</div>
+            <div class="tiny muted">確率 / オッズ / 期待回収</div>
           </div>
           <div class="bd">
             {% if best_bets and (best_bets|length > 0) %}
               <div class="ranklist">
                 {% for r in best_bets %}
-                  <div class="rankitem">
+                  {% set prob_pct = (r.get("prob", r.get("score", 0.0)) * 100.0) %}
+                  {% set odds_val = r.get("odds_raw", r.get("odds", 0.0)) | float %}
+                  {% set expected_return_yen = (r.get("prob", r.get("score", 0.0)) * odds_val * 100.0) %}
+
+                  {% set row_class = "" %}
+                  {% if expected_return_yen >= 180 %}
+                    {% set row_class = "ev-verygreen" %}
+                  {% elif expected_return_yen >= 130 %}
+                    {% set row_class = "ev-green" %}
+                  {% elif expected_return_yen >= 100 %}
+                    {% set row_class = "ev-mid" %}
+                  {% endif %}
+
+                  <div class="rankitem {{ row_class }}">
                     <div class="rankleft">
                       <div class="rk">{{ r.get("buy_rank", loop.index) }}</div>
                       <div style="min-width:0;">
@@ -577,12 +826,9 @@
                       </div>
                     </div>
                     <div class="rightbox">
-                      <div class="pval">S {{ "%.3f"|format(r.get("buy_score", 0.0)) }}</div>
-                      <div class="oval">odds {{ "%.2f"|format(r.get("odds_raw", r.get("odds", 0.0))) }}</div>
-                      <div class="evval">
-                        p {{ "%.2f"|format((r.get("prob", r.get("score", 0.0))) * 100.0) }}%
-                        / EV {{ "%.2f"|format(r.get("ev_raw", 0.0)) }}
-                      </div>
+                      <div class="pval">{{ "%.2f"|format(prob_pct) }}%</div>
+                      <div class="oval">{{ "%.2f"|format(odds_val) }}倍</div>
+                      <div class="evval">100円 → {{ "%.0f"|format(expected_return_yen) }}円</div>
                     </div>
                   </div>
                 {% endfor %}
@@ -646,10 +892,13 @@
                 </div>
               </div>
               <div class="summaryMini">
-                <div class="k">最大EV</div>
+                <div class="k">100円期待回収</div>
                 <div class="v">
                   {% if top_ev_items|length > 0 %}
-                    {{ "%.2f"|format(top_ev_items[0][1]) }}
+                    {% set top_ev_combo = top_ev_items[0][0] %}
+                    {% set top_ev_prob = probabilities.get(top_ev_combo, 0.0) if probabilities is defined and probabilities else 0.0 %}
+                    {% set top_ev_odd = get_odd_from_grouped(top_ev_combo, godata) | float %}
+                    {{ "%.0f"|format(top_ev_prob * top_ev_odd * 100.0) }}円
                   {% else %}
                     -
                   {% endif %}
@@ -671,8 +920,19 @@
               {% for k, v in items %}
                 {% if loop.index <= 20 %}
                   {% set odd_rank = get_odd_from_grouped(k, godata) %}
-                  {% set ev_rank = ev_result.get(k) if ev_result is defined and ev_result else none %}
-                  <div class="rankitem">
+                  {% set odd_rank_num = odd_rank | float %}
+                  {% set expected_return_yen = v * odd_rank_num * 100.0 %}
+
+                  {% set row_class = "" %}
+                  {% if expected_return_yen >= 180 %}
+                    {% set row_class = "ev-verygreen" %}
+                  {% elif expected_return_yen >= 130 %}
+                    {% set row_class = "ev-green" %}
+                  {% elif expected_return_yen >= 100 %}
+                    {% set row_class = "ev-mid" %}
+                  {% endif %}
+
+                  <div class="rankitem {{ row_class }}">
                     <div class="rankleft">
                       <div class="rk">{{ loop.index }}</div>
                       <div style="min-width:0;">
@@ -680,11 +940,9 @@
                       </div>
                     </div>
                     <div class="rightbox">
-                      <div class="pval">{{ "%.2f"|format(v * 100.0) }}</div>
+                      <div class="pval">{{ "%.2f"|format(v * 100.0) }}%</div>
                       <div class="oval">{{ odd_rank }}</div>
-                      {% if ev_rank is not none %}
-                        <div class="evval">EV {{ "%.2f"|format(ev_rank) }}</div>
-                      {% endif %}
+                      <div class="evval">100円 → {{ "%.0f"|format(expected_return_yen) }}円</div>
                     </div>
                   </div>
                 {% endif %}
@@ -701,7 +959,7 @@
         <div class="card">
           <div class="hd">
             <div class="ttl">EV Top10</div>
-            <div class="tiny muted">期待値順</div>
+            <div class="tiny muted">期待回収順</div>
           </div>
           <div class="bd">
             {% if ev_result is defined and ev_result and (ev_result|length > 0) %}
@@ -710,13 +968,19 @@
               {% for k, v in ev_items %}
                 {% if loop.index <= 10 %}
                   {% set odd_rank = get_odd_from_grouped(k, godata) %}
+                  {% set odd_rank_num = odd_rank | float %}
                   {% set prob_rank = probabilities.get(k) if probabilities is defined and probabilities else none %}
+                  {% set expected_return_yen = (prob_rank * odd_rank_num * 100.0) if prob_rank is not none else 0.0 %}
+
                   {% set row_class = "" %}
-                  {% if v >= 2.0 %}
-                    {% set row_class = "ev-hot" %}
-                  {% elif v >= 1.2 %}
-                    {% set row_class = "ev-good" %}
+                  {% if expected_return_yen >= 180 %}
+                    {% set row_class = "ev-verygreen" %}
+                  {% elif expected_return_yen >= 130 %}
+                    {% set row_class = "ev-green" %}
+                  {% elif expected_return_yen >= 100 %}
+                    {% set row_class = "ev-mid" %}
                   {% endif %}
+
                   <div class="rankitem {{ row_class }}">
                     <div class="rankleft">
                       <div class="rk">{{ loop.index }}</div>
@@ -725,7 +989,7 @@
                       </div>
                     </div>
                     <div class="rightbox">
-                      <div class="pval">{{ "%.2f"|format(v) }}</div>
+                      <div class="pval">{{ "%.0f"|format(expected_return_yen) }}円</div>
                       <div class="oval">{{ odd_rank }}</div>
                       {% if prob_rank is not none %}
                         <div class="evval">p {{ "%.2f"|format(prob_rank * 100.0) }}%</div>
@@ -750,16 +1014,11 @@
 
   {% endif %}
 
+  <div class="footerNote">
+    ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。<br>
+    投資・購入は必ず自己責任でお願いします。
+  </div>
+
 </div>
 </body>
 </html>
-<div style="
-  margin-top:20px;
-  padding:12px;
-  text-align:center;
-  font-size:12px;
-  color:rgba(255,255,255,0.6);
-">
-  ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。<br>
-  投資・購入は必ず自己責任でお願いします。
-</div>

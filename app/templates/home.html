@@ -253,10 +253,80 @@ input[type="date"]{
   line-height:1.7;
 }
 
+/* ===== 会場別成績 ===== */
+.stats-section{
+  margin-top:28px;
+}
+
+.stats-title{
+  margin:0 0 14px;
+  font-size:22px;
+  font-weight:900;
+}
+
+.stats-sub{
+  margin:0 0 18px;
+  color:var(--muted);
+  font-size:13px;
+  line-height:1.7;
+}
+
+.stats-grid{
+  display:grid;
+  grid-template-columns: repeat(3, minmax(0,1fr));
+  gap:16px;
+}
+
+.stats-card{
+  padding:18px;
+  border-radius:18px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  box-shadow:var(--shadow);
+}
+
+.stats-card h3{
+  margin:0 0 14px;
+  font-size:18px;
+  font-weight:900;
+}
+
+.stat-row{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  padding:8px 0;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+}
+
+.stat-row:last-child{
+  border-bottom:none;
+}
+
+.stat-label{
+  font-size:13px;
+  color:var(--muted);
+}
+
+.stat-value{
+  font-size:14px;
+  font-weight:900;
+}
+
+.stat-value.good{
+  color:#9dffb9;
+}
+
+.stat-value.bad{
+  color:#ff9fbf;
+}
+
 /* モバイル */
 @media (max-width: 920px){
   .hero{grid-template-columns:1fr;}
   .img-card{height:280px;}
+  .stats-grid{grid-template-columns:1fr;}
 }
 @media (max-width: 520px){
   .hero-title{font-size:26px;}
@@ -337,8 +407,79 @@ input[type="date"]{
     </div>
   </section>
 
+  <section class="stats-section">
+    <h2 class="stats-title">会場別成績</h2>
+    <p class="stats-sub">
+      的中ログから集計した現在の成績です。会場ごとの傾向をざっくり確認できます。
+    </p>
+
+    <div class="stats-grid">
+      {% for venue_name in ["丸亀", "戸田", "児島"] %}
+        {% set s = home_stats.get(venue_name, {}) %}
+        {% set roi = (s.get("roi", 0.0) or 0.0) * 100.0 %}
+        {% set profit = s.get("total_profit", 0.0) or 0.0 %}
+
+        <div class="stats-card">
+          <h3>{{ venue_name }}</h3>
+
+          <div class="stat-row">
+            <div class="stat-label">回収率</div>
+            <div class="stat-value {{ 'good' if roi >= 100 else 'bad' }}">
+              {{ "%.2f"|format(roi) }}%
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-label">的中率</div>
+            <div class="stat-value">
+              {{ "%.2f"|format((s.get("hit_rate", 0.0) or 0.0) * 100.0) }}%
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-label">総投資</div>
+            <div class="stat-value">
+              {{ "{:,.0f}".format(s.get("total_bets", 0.0) or 0.0) }}円
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-label">総回収</div>
+            <div class="stat-value">
+              {{ "{:,.0f}".format(s.get("total_return", 0.0) or 0.0) }}円
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-label">総利益</div>
+            <div class="stat-value {{ 'good' if profit >= 0 else 'bad' }}">
+              {{ "{:,.0f}".format(profit) }}円
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-label">購入点数</div>
+            <div class="stat-value">
+              {{ s.get("buy_count", 0) or 0 }}点
+            </div>
+          </div>
+
+          <div class="stat-row">
+            <div class="stat-label">的中数</div>
+            <div class="stat-value">
+              {{ s.get("hit_count", 0) or 0 }}本
+            </div>
+          </div>
+        </div>
+      {% endfor %}
+    </div>
+  </section>
+
   <div class="footer">
-    BoatRace AI Local System
+    BoatRace AI Local System<br>
+    <span style="opacity:0.7;">
+      ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。投資・購入は必ず自己責任でお願いします。
+    </span>
   </div>
 
 </div>
@@ -370,8 +511,8 @@ let stopTimer = null;
 let wakeLock = null;
 let startedAt = null;
 
-const KEEP_MS = 60 * 60 * 1000;   // 1時間
-const PING_MS = 5 * 60 * 1000;    // 5分
+const KEEP_MS = 60 * 60 * 1000;
+const PING_MS = 5 * 60 * 1000;
 
 const statusEl = document.getElementById("keepAliveStatus");
 const startBtn = document.getElementById("startKeepAliveBtn");
@@ -500,23 +641,6 @@ document.addEventListener("visibilitychange", async ()=>{
 
 startBtn.addEventListener("click", startKeepAlive);
 stopBtn.addEventListener("click", ()=>stopKeepAlive(true));
-</script>
-
-</body>
-</html>
-<!-- 省略（既存そのまま） -->
-
-  <div class="footer">
-    BoatRace AI Local System<br>
-    <span style="opacity:0.7;">
-      ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。投資・購入は必ず自己責任でお願いします。
-    </span>
-  </div>
-
-</div>
-
-<script>
-/* 既存そのまま */
 </script>
 
 </body>

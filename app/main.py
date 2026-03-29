@@ -1,12 +1,13 @@
 from __future__ import annotations
 
-import math
 import os
 import traceback
 from datetime import datetime
+from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List
 
+import pandas as pd
 from flask import Flask, jsonify, render_template, request
 
 try:
@@ -15,13 +16,15 @@ except Exception as e:
     print("[IMPORT_ERROR]", e)
     RaceController = None  # type: ignore
 
+from engine.prediction_logger import build_prediction_rows, save_prediction_rows
+
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+MERGED_LOG_PATH = PROJECT_ROOT / "data" / "logs" / "prediction_results_merged.csv"
 
-# =========================
-# 基本ユーティリティ
-# =========================
+
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
         if x is None or x == "":
@@ -42,16 +45,7 @@ def _blank_races() -> List[Dict[str, Any]]:
 def _calc_ev(prob: float, odds: float) -> float:
     if odds <= 0 or prob <= 0:
         return 0.0
-
-    odds_adj = math.log1p(odds)
-    ev = prob * odds_adj
-
-    if odds > 80:
-        ev *= 0.7
-    if odds > 150:
-        ev *= 0.5
-
-    return float(ev)
+    return float(prob * odds)
 
 
 def _build_all_trifecta_labels() -> List[str]:
@@ -132,6 +126,77 @@ def _grouped_odds_to_flat_map(grouped_odds: Dict[str, Any] | None) -> Dict[str, 
     return out
 
 
+def _normalize_venue_name(v: str) -> str:
+    s = str(v or "").strip()
+    if "丸亀" in s:
+        return "丸亀"
+    if "戸田" in s:
+        return "戸田"
+    if "児島" in s:
+        return "児島"
+    return s
+
+
+def _build_home_stats() -> Dict[str, Dict[str, Any]]:
+    venue_order = ["丸亀", "戸田", "児島"]
+    empty_row = {
+        "buy_count": 0,
+        "hit_count": 0,
+        "hit_rate": 0.0,
+        "total_bets": 0.0,
+        "total_return": 0.0,
+        "total_profit": 0.0,
+        "roi": 0.0,
+    }
+    out = {v: dict(empty_row) for v in venue_order}
+
+    if not MERGED_LOG_PATH.exists():
+        return out
+
+    try:
+        df = pd.read_csv(MERGED_LOG_PATH)
+    except Exception as e:
+        print("[WARN] failed to read merged log:", e)
+        return out
+
+    if df.empty:
+        return out
+
+    if "venue" not in df.columns or "is_selected" not in df.columns:
+        return out
+
+    df["venue_norm"] = df["venue"].astype(str).map(_normalize_venue_name)
+    df = df[df["is_selected"] == 1].copy()
+
+    if df.empty:
+        return out
+
+    for venue in venue_order:
+        vdf = df[df["venue_norm"] == venue].copy()
+        if vdf.empty:
+            continue
+
+        buy_count = int(len(vdf))
+        hit_count = int((vdf["is_hit"] == 1).sum()) if "is_hit" in vdf.columns else 0
+        total_bets = float(vdf["bet_cost_yen"].fillna(0).sum()) if "bet_cost_yen" in vdf.columns else 0.0
+        total_return = float(vdf["return_yen"].fillna(0).sum()) if "return_yen" in vdf.columns else 0.0
+        total_profit = total_return - total_bets
+        hit_rate = (hit_count / buy_count) if buy_count > 0 else 0.0
+        roi = (total_return / total_bets) if total_bets > 0 else 0.0
+
+        out[venue] = {
+            "buy_count": buy_count,
+            "hit_count": hit_count,
+            "hit_rate": hit_rate,
+            "total_bets": total_bets,
+            "total_return": total_return,
+            "total_profit": total_profit,
+            "roi": roi,
+        }
+
+    return out
+
+
 def _debug_render_log(
     venue: str,
     date: str,
@@ -156,25 +221,7 @@ def _debug_render_log(
     print("[DEBUG] ev_result     :", len(ev_result))
     print("[DEBUG] odds exists   :", bool(grouped_odds and grouped_odds.get("data")))
 
-    if best_bets:
-        print("[DEBUG] best_bets top5:")
-        for row in best_bets[:5]:
-            print(
-                "  ",
-                row.get("buy_rank", "-"),
-                row.get("combo", ""),
-                "score=", round(_safe_float(row.get("score", row.get("prob", 0.0)), 0.0), 6),
-                "buy_score=", round(_safe_float(row.get("buy_score", 0.0), 0.0), 6),
-                "odds=", round(_safe_float(row.get("odds", row.get("odds_raw", 0.0)), 0.0), 2),
-            )
 
-    nonzero_probs = sum(1 for v in probabilities.values() if v > 0)
-    print("[DEBUG] nonzero_probs :", nonzero_probs)
-
-
-# =========================
-# venue別 entries
-# =========================
 def _get_entries_and_beforeinfo(controller: RaceController, venue: str, date: str, race_no: int):
     if venue == "戸田":
         entries = controller.get_entries_toda_race(date, race_no)
@@ -206,9 +253,30 @@ def _get_full_bundle(controller: RaceController, venue: str, date: str, race_no:
     return grouped_odds, (bundle or {})
 
 
-# =========================
-# メイン描画
-# =========================
+def _save_prediction_log(
+    *,
+    date: str,
+    venue: str,
+    race_no: int,
+    best_bets: List[Dict[str, Any]],
+    probabilities: Dict[str, float],
+    grouped_odds: Dict[str, Any],
+) -> None:
+    try:
+        prediction_rows = build_prediction_rows(
+            date=date,
+            venue=venue,
+            race_no=race_no,
+            best_bets=best_bets,
+            probabilities=probabilities,
+            grouped_odds=grouped_odds,
+            model_name="binary_catboost_venue",
+        )
+        save_prediction_rows(prediction_rows)
+    except Exception as log_e:
+        print("[WARN] prediction log save failed:", log_e)
+
+
 def _render(venue: str):
     if RaceController is None:
         return "RaceController import error", 500
@@ -231,7 +299,6 @@ def _render(venue: str):
     race_no = int(race_str)
 
     try:
-        # まずは常に軽い処理だけ
         entries, beforeinfo = _get_entries_and_beforeinfo(controller, venue, date, race_no)
 
         grouped_odds: Dict[str, Any] = {}
@@ -239,7 +306,6 @@ def _render(venue: str):
         probabilities: Dict[str, float] = {}
         ev_result: Dict[str, float] = {}
 
-        # mode=full の時だけ重い処理
         if mode == "full":
             grouped_odds, bundle = _get_full_bundle(controller, venue, date, race_no)
 
@@ -255,6 +321,15 @@ def _render(venue: str):
 
             ev_result = _build_ev_map_from_prob_and_odds(probabilities, odds_map)
             best_bets = bundle.get("best_bets", []) or []
+
+            _save_prediction_log(
+                date=date,
+                venue=venue,
+                race_no=race_no,
+                best_bets=best_bets,
+                probabilities=probabilities,
+                grouped_odds=grouped_odds,
+            )
 
         races = _blank_races()
         races[race_no - 1]["entries"] = entries
@@ -309,15 +384,18 @@ def _render(venue: str):
             best_bets=[],
             beforeinfo={},
             error_message=str(e),
+            mode=mode,
         )
 
 
-# =========================
-# ルート
-# =========================
 @app.route("/")
 def home():
-    return render_template("home.html", date=_today())
+    home_stats = _build_home_stats()
+    return render_template(
+        "home.html",
+        date=_today(),
+        home_stats=home_stats,
+    )
 
 
 @app.route("/ping")

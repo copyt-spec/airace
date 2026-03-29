@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import math
 from pathlib import Path
 from typing import Any, Dict, List
 
@@ -18,7 +19,8 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.45,
         "ev_exp": 0.70,
         "base_bonus": 0.66,
-        "fixed_points": 5,
+        "min_points": 3,
+        "max_points": 12,
     },
     "児島": {
         "min_prob": 0.015,
@@ -30,7 +32,8 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.28,
         "ev_exp": 0.82,
         "base_bonus": 0.64,
-        "fixed_points": 7,
+        "min_points": 3,
+        "max_points": 12,
     },
     "戸田": {
         "min_prob": 0.014,
@@ -42,7 +45,8 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.24,
         "ev_exp": 0.86,
         "base_bonus": 0.63,
-        "fixed_points": 8,
+        "min_points": 3,
+        "max_points": 12,
     },
     "default": {
         "min_prob": 0.015,
@@ -54,7 +58,8 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.35,
         "ev_exp": 0.75,
         "base_bonus": 0.65,
-        "fixed_points": 6,
+        "min_points": 3,
+        "max_points": 12,
     },
 }
 
@@ -101,7 +106,12 @@ def _load_external_config() -> Dict[str, Dict[str, float]]:
         for k, v in raw.items():
             if not isinstance(v, dict):
                 continue
-            out[str(k)] = {str(kk): float(vv) for kk, vv in v.items()}
+            out[str(k)] = {}
+            for kk, vv in v.items():
+                try:
+                    out[str(k)][str(kk)] = float(vv)
+                except Exception:
+                    continue
         return out
     except Exception:
         return {}
@@ -135,6 +145,22 @@ def _resolve_config(
         cfg["weight_ev"] = float(weight_ev)
     if weight_odds is not None:
         cfg["weight_odds"] = float(weight_odds)
+
+    if "fixed_points" in cfg:
+        fp = _safe_int(cfg["fixed_points"], 6)
+        cfg["min_points"] = float(fp)
+        cfg["max_points"] = float(fp)
+
+    if "min_points" not in cfg:
+        cfg["min_points"] = 3.0
+    if "max_points" not in cfg:
+        cfg["max_points"] = 12.0
+
+    # 必ず 3〜12 に収める
+    cfg["min_points"] = float(max(3, min(12, _safe_int(cfg["min_points"], 3))))
+    cfg["max_points"] = float(max(3, min(12, _safe_int(cfg["max_points"], 12))))
+    if cfg["max_points"] < cfg["min_points"]:
+        cfg["max_points"] = cfg["min_points"]
 
     return cfg
 
@@ -288,10 +314,119 @@ def _calc_odds_zone_bonus(odds: float, venue: str = "default") -> float:
     return 1.00
 
 
-def _calc_point_count(rows: List[Dict[str, Any]], venue: str = "default") -> int:
-    cfg = _resolve_config(venue=venue)
-    fixed_points = _safe_int(cfg.get("fixed_points", 6), 6)
-    return max(3, min(16, fixed_points))
+def _calc_distribution_entropy(probs: List[float]) -> float:
+    vals = [p for p in probs if p > 0]
+    if not vals:
+        return 1.0
+
+    total = sum(vals)
+    if total <= 0:
+        return 1.0
+
+    norm = [p / total for p in vals]
+    h = 0.0
+    for p in norm:
+        h -= p * math.log(p + 1e-12)
+
+    max_h = math.log(len(norm) + 1e-12)
+    if max_h <= 0:
+        return 0.0
+
+    score = h / max_h
+    return max(0.0, min(1.0, score))
+
+
+def _calc_dynamic_points(rows: List[Dict[str, Any]], venue: str, cfg: Dict[str, float]) -> int:
+    """
+    必ず 3〜12点の範囲で可変
+    """
+    min_points = max(3, min(12, _safe_int(cfg.get("min_points", 3), 3)))
+    max_points = max(min_points, min(12, _safe_int(cfg.get("max_points", 12), 12)))
+
+    probs = sorted([_safe_float(r.get("prob", 0.0), 0.0) for r in rows], reverse=True)
+    if not probs:
+        return min_points
+
+    top1 = probs[0] if len(probs) >= 1 else 0.0
+    top2 = probs[1] if len(probs) >= 2 else 0.0
+    top3_sum = sum(probs[:3])
+    top5_sum = sum(probs[:5])
+    entropy = _calc_distribution_entropy(probs[:10])
+
+    spread_score = 0.0
+
+    # 本命が強いほど絞る
+    spread_score += (0.12 - min(top1, 0.12)) / 0.12 * 0.42
+
+    # 上位3つが薄いほど広げる
+    spread_score += (0.24 - min(top3_sum, 0.24)) / 0.24 * 0.22
+
+    # 上位5つが薄いほど広げる
+    spread_score += (0.36 - min(top5_sum, 0.36)) / 0.36 * 0.14
+
+    # 1位と2位の差が小さいほど広げる
+    gap12 = max(0.0, top1 - top2)
+    spread_score += (0.03 - min(gap12, 0.03)) / 0.03 * 0.08
+
+    # 分布ばらつき
+    spread_score += entropy * 0.28
+
+    v = _normalize_venue_name(venue)
+    if v == "丸亀":
+        spread_score *= 0.82
+    elif v == "児島":
+        spread_score *= 1.00
+    elif v == "戸田":
+        spread_score *= 1.08
+
+    spread_score = max(0.0, min(1.0, spread_score))
+
+    points = min_points + round((max_points - min_points) * spread_score)
+
+    # 強本命時はさらに絞る
+    if top1 >= 0.10 and top3_sum >= 0.23:
+        points = min(points, 3)
+    elif top1 >= 0.08 and top5_sum >= 0.34:
+        points = min(points, max(4, min_points))
+
+    # 超分散時は少し増やす
+    if entropy >= 0.88 and top1 <= 0.05:
+        points = min(max_points, points + 1)
+
+    return max(3, min(12, points))
+
+
+def _prepare_candidate_rows(
+    ai_preds: List[Dict[str, Any]],
+    cfg: Dict[str, float],
+    use_min_prob: bool = True,
+) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+
+    for row in ai_preds:
+        combo = str(row.get("combo", "")).strip()
+        prob = _safe_float(row.get("prob", row.get("score", 0.0)), 0.0)
+        odds = _safe_float(row.get("odds", row.get("odds_raw", 0.0)), 0.0)
+        ev = _safe_float(row.get("ev", row.get("ev_raw", prob * odds)), 0.0)
+
+        if not combo:
+            continue
+        if use_min_prob and prob < cfg["min_prob"]:
+            continue
+        if odds <= 0:
+            continue
+        if ev <= 0:
+            continue
+
+        row2 = dict(row)
+        row2["prob"] = prob
+        row2["odds_raw"] = odds
+        row2["ev_raw"] = ev
+        row2["odds_capped"] = min(odds, cfg["max_odds_cap"])
+        row2["ev_capped"] = min(ev, cfg["max_ev_cap"])
+        rows.append(row2)
+
+    return rows
 
 
 def select_best_bets(
@@ -315,33 +450,17 @@ def select_best_bets(
         weight_odds=weight_odds,
     )
 
-    rows: List[Dict[str, Any]] = []
+    # まず min_prob ありで候補作成
+    rows = _prepare_candidate_rows(ai_preds, cfg, use_min_prob=True)
 
-    for row in ai_preds:
-        combo = str(row.get("combo", "")).strip()
-        prob = _safe_float(row.get("prob", row.get("score", 0.0)), 0.0)
-        odds = _safe_float(row.get("odds", row.get("odds_raw", 0.0)), 0.0)
-        ev = _safe_float(row.get("ev", row.get("ev_raw", prob * odds)), 0.0)
+    # 候補が少なすぎたら min_prob 無視で補充用候補を使う
+    backup_rows = _prepare_candidate_rows(ai_preds, cfg, use_min_prob=False)
 
-        if not combo:
-            continue
-        if prob < cfg["min_prob"]:
-            continue
-        if odds <= 0:
-            continue
-        if ev <= 0:
-            continue
-
-        row2 = dict(row)
-        row2["prob"] = prob
-        row2["odds_raw"] = odds
-        row2["ev_raw"] = ev
-        row2["odds_capped"] = min(odds, cfg["max_odds_cap"])
-        row2["ev_capped"] = min(ev, cfg["max_ev_cap"])
-        rows.append(row2)
+    if not rows and not backup_rows:
+        return []
 
     if not rows:
-        return []
+        rows = backup_rows[:]
 
     prob_vals = [r["prob"] for r in rows]
     odds_vals = [r["odds_capped"] for r in rows]
@@ -389,10 +508,54 @@ def select_best_bets(
         reverse=True,
     )
 
-    auto_points = _calc_point_count(rows=rows, venue=venue or "default")
-    final_n = max(3, min(top_n, auto_points))
+    dynamic_points = _calc_dynamic_points(
+        rows=rows,
+        venue=venue or "default",
+        cfg=cfg,
+    )
+    final_n = max(3, min(12, min(top_n, dynamic_points)))
+
+    # 候補不足なら backup から補充
+    if len(rows) < final_n:
+        existing = {str(r.get("combo", "")) for r in rows}
+        backup_rows_sorted = sorted(
+            backup_rows,
+            key=lambda x: _safe_float(x.get("prob", 0.0), 0.0),
+            reverse=True,
+        )
+
+        for br in backup_rows_sorted:
+            combo = str(br.get("combo", ""))
+            if combo in existing:
+                continue
+
+            # 補充行にも最低限の派生値を持たせる
+            prob = _safe_float(br.get("prob", br.get("score", 0.0)), 0.0)
+            odds = _safe_float(br.get("odds_raw", br.get("odds", 0.0)), 0.0)
+            ev = _safe_float(br.get("ev_raw", br.get("ev", prob * odds)), 0.0)
+
+            row2 = dict(br)
+            row2["prob"] = prob
+            row2["odds_raw"] = odds
+            row2["ev_raw"] = ev
+            row2["buy_score"] = prob  # 補充時はprob順でOK
+            rows.append(row2)
+            existing.add(combo)
+
+            if len(rows) >= final_n:
+                break
+
+        rows.sort(
+            key=lambda x: (
+                float(x.get("buy_score", 0.0)),
+                float(x.get("prob", 0.0)),
+                float(x.get("ev_raw", 0.0)),
+            ),
+            reverse=True,
+        )
 
     selected = rows[:final_n]
+
     for idx, r in enumerate(selected, start=1):
         r["buy_rank"] = idx
         r["is_best_bet"] = True
