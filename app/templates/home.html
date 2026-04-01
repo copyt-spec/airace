@@ -36,7 +36,7 @@ body{
 }
 
 .wrap{
-  width:min(1200px,94vw);
+  width:min(1280px,94vw);
   margin:0 auto;
   padding:30px 0 80px;
 }
@@ -46,6 +46,8 @@ body{
   justify-content:space-between;
   align-items:center;
   margin-bottom:20px;
+  gap:12px;
+  flex-wrap:wrap;
 }
 
 .logo{
@@ -63,6 +65,22 @@ body{
 }
 .brand small{
   display:block;font-size:12px;color:var(--muted);
+}
+
+.top-links{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.top-links a{
+  text-decoration:none;
+  color:var(--text);
+  padding:10px 14px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  font-weight:700;
 }
 
 .hero{
@@ -157,7 +175,6 @@ input[type="date"]{
   gap:24px;
 }
 
-/* ===== 画像大型化 ===== */
 .img-card{
   position:relative;
   border-radius:var(--radius);
@@ -253,76 +270,113 @@ input[type="date"]{
   line-height:1.7;
 }
 
-/* ===== 会場別成績 ===== */
 .stats-section{
-  margin-top:28px;
+  margin-top:26px;
 }
 
-.stats-title{
+.section-title{
   margin:0 0 14px;
   font-size:22px;
   font-weight:900;
 }
 
-.stats-sub{
+.section-sub{
   margin:0 0 18px;
   color:var(--muted);
-  font-size:13px;
   line-height:1.7;
+  font-size:14px;
 }
 
 .stats-grid{
   display:grid;
-  grid-template-columns: repeat(3, minmax(0,1fr));
-  gap:16px;
+  grid-template-columns:repeat(3, 1fr);
+  gap:18px;
 }
 
-.stats-card{
-  padding:18px;
-  border-radius:18px;
+.stat-card{
+  border-radius:20px;
   border:1px solid var(--border);
   background:rgba(255,255,255,0.05);
   box-shadow:var(--shadow);
+  padding:20px;
 }
 
-.stats-card h3{
-  margin:0 0 14px;
-  font-size:18px;
-  font-weight:900;
+.stat-card.good{
+  background:var(--okbg);
+  border-color:var(--okbd);
 }
 
-.stat-row{
+.stat-card.warn{
+  background:var(--warnbg);
+  border-color:var(--warnbd);
+}
+
+.stat-card.bad{
+  background:var(--errbg);
+  border-color:var(--errbd);
+}
+
+.stat-header{
   display:flex;
   justify-content:space-between;
   align-items:center;
-  gap:12px;
+  gap:10px;
+  margin-bottom:14px;
+}
+
+.stat-header h3{
+  margin:0;
+  font-size:20px;
+  font-weight:900;
+}
+
+.badge{
+  padding:6px 10px;
+  border-radius:999px;
+  font-size:12px;
+  font-weight:900;
+  border:1px solid rgba(255,255,255,0.16);
+  background:rgba(255,255,255,0.08);
+}
+
+.kv{
+  display:grid;
+  grid-template-columns: 1fr auto;
+  gap:10px;
   padding:8px 0;
   border-bottom:1px solid rgba(255,255,255,0.08);
 }
 
-.stat-row:last-child{
+.kv:last-child{
   border-bottom:none;
 }
 
-.stat-label{
-  font-size:13px;
+.k{
   color:var(--muted);
+  font-size:13px;
 }
 
-.stat-value{
-  font-size:14px;
+.v{
+  font-weight:900;
+  font-variant-numeric: tabular-nums;
+}
+
+.sim-link-box{
+  margin-top:18px;
+  text-align:center;
+}
+
+.sim-link{
+  display:inline-block;
+  padding:12px 18px;
+  border-radius:16px;
+  border:1px solid rgba(255,255,255,0.12);
+  background:rgba(255,255,255,0.08);
+  color:rgba(255,255,255,0.92);
+  text-decoration:none;
   font-weight:900;
 }
 
-.stat-value.good{
-  color:#9dffb9;
-}
-
-.stat-value.bad{
-  color:#ff9fbf;
-}
-
-/* モバイル */
 @media (max-width: 920px){
   .hero{grid-template-columns:1fr;}
   .img-card{height:280px;}
@@ -353,6 +407,11 @@ input[type="date"]{
         <small>機械学習 × オッズ × 直前情報</small>
       </div>
     </div>
+
+    <div class="top-links">
+      <a href="/">Home</a>
+      <a href="/sim">期間集計</a>
+    </div>
   </div>
 
   <section class="hero">
@@ -372,6 +431,10 @@ input[type="date"]{
         <button class="btn btn-primary" id="goMarugame">丸亀へ</button>
         <button class="btn btn-secondary" id="goToda">戸田へ</button>
         <button class="btn btn-tertiary" id="goKojima">児島へ</button>
+      </div>
+
+      <div class="sim-link-box" style="text-align:left;">
+        <a href="/sim" class="sim-link">シミュレーション期間集計へ</a>
       </div>
 
       <div class="keep-card">
@@ -408,67 +471,59 @@ input[type="date"]{
   </section>
 
   <section class="stats-section">
-    <h2 class="stats-title">会場別成績</h2>
-    <p class="stats-sub">
-      的中ログから集計した現在の成績です。会場ごとの傾向をざっくり確認できます。
+    <h3 class="section-title">過去1年シミュレーション合算</h3>
+    <p class="section-sub">
+      現在保存されている1年シミュレーションCSVをもとに、会場別の成績を表示しています。
     </p>
 
     <div class="stats-grid">
-      {% for venue_name in ["丸亀", "戸田", "児島"] %}
-        {% set s = home_stats.get(venue_name, {}) %}
-        {% set roi = (s.get("roi", 0.0) or 0.0) * 100.0 %}
-        {% set profit = s.get("total_profit", 0.0) or 0.0 %}
+      {% for venue in ["丸亀", "戸田", "児島"] %}
+        {% set row = home_stats.get(venue, {}) %}
+        {% set roi = row.get("roi", 0) %}
+        {% set card_class = "bad" %}
+        {% if roi >= 1.05 %}
+          {% set card_class = "good" %}
+        {% elif roi >= 1.0 %}
+          {% set card_class = "warn" %}
+        {% endif %}
 
-        <div class="stats-card">
-          <h3>{{ venue_name }}</h3>
-
-          <div class="stat-row">
-            <div class="stat-label">回収率</div>
-            <div class="stat-value {{ 'good' if roi >= 100 else 'bad' }}">
-              {{ "%.2f"|format(roi) }}%
-            </div>
+        <div class="stat-card {{ card_class }}">
+          <div class="stat-header">
+            <h3>{{ venue }}</h3>
+            <div class="badge">ROI {{ "%.3f"|format(roi) }}</div>
           </div>
 
-          <div class="stat-row">
-            <div class="stat-label">的中率</div>
-            <div class="stat-value">
-              {{ "%.2f"|format((s.get("hit_rate", 0.0) or 0.0) * 100.0) }}%
-            </div>
+          <div class="kv">
+            <div class="k">レース数</div>
+            <div class="v">{{ row.get("race_count", 0) }}</div>
           </div>
-
-          <div class="stat-row">
-            <div class="stat-label">総投資</div>
-            <div class="stat-value">
-              {{ "{:,.0f}".format(s.get("total_bets", 0.0) or 0.0) }}円
-            </div>
+          <div class="kv">
+            <div class="k">購入点数</div>
+            <div class="v">{{ row.get("buy_count", 0) }}</div>
           </div>
-
-          <div class="stat-row">
-            <div class="stat-label">総回収</div>
-            <div class="stat-value">
-              {{ "{:,.0f}".format(s.get("total_return", 0.0) or 0.0) }}円
-            </div>
+          <div class="kv">
+            <div class="k">的中数</div>
+            <div class="v">{{ row.get("hit_count", 0) }}</div>
           </div>
-
-          <div class="stat-row">
-            <div class="stat-label">総利益</div>
-            <div class="stat-value {{ 'good' if profit >= 0 else 'bad' }}">
-              {{ "{:,.0f}".format(profit) }}円
-            </div>
+          <div class="kv">
+            <div class="k">的中率</div>
+            <div class="v">{{ "%.2f"|format(row.get("hit_rate", 0) * 100) }}%</div>
           </div>
-
-          <div class="stat-row">
-            <div class="stat-label">購入点数</div>
-            <div class="stat-value">
-              {{ s.get("buy_count", 0) or 0 }}点
-            </div>
+          <div class="kv">
+            <div class="k">平均買い目点数</div>
+            <div class="v">{{ "%.2f"|format(row.get("avg_points", 0)) }}</div>
           </div>
-
-          <div class="stat-row">
-            <div class="stat-label">的中数</div>
-            <div class="stat-value">
-              {{ s.get("hit_count", 0) or 0 }}本
-            </div>
+          <div class="kv">
+            <div class="k">投資額</div>
+            <div class="v">{{ "{:,.0f}".format(row.get("total_bets", 0)) }}円</div>
+          </div>
+          <div class="kv">
+            <div class="k">回収額</div>
+            <div class="v">{{ "{:,.0f}".format(row.get("total_return", 0)) }}円</div>
+          </div>
+          <div class="kv">
+            <div class="k">利益</div>
+            <div class="v">{{ "{:,.0f}".format(row.get("total_profit", 0)) }}円</div>
           </div>
         </div>
       {% endfor %}

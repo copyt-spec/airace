@@ -1,0 +1,327 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1"/>
+<title>BoatRace AI - Simulation Stats</title>
+
+<style>
+:root{
+  --bg1:#071021;
+  --bg2:#0b1630;
+  --border: rgba(255,255,255,0.12);
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.70);
+  --shadow: 0 30px 90px rgba(0,0,0,0.55);
+  --radius: 22px;
+  --good: rgba(120,255,176,0.14);
+  --goodbd: rgba(120,255,176,0.28);
+  --warn: rgba(255,190,120,0.14);
+  --warnbd: rgba(255,190,120,0.28);
+  --bad: rgba(255,120,160,0.14);
+  --badbd: rgba(255,120,160,0.28);
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+  "Hiragino Sans","Noto Sans JP","Yu Gothic",Meiryo,sans-serif;
+  color:var(--text);
+  background:
+    radial-gradient(1000px 600px at 20% 10%, rgba(64,179,255,0.25), transparent 60%),
+    radial-gradient(800px 600px at 80% 20%, rgba(255,120,200,0.18), transparent 60%),
+    linear-gradient(180deg,var(--bg1),var(--bg2));
+  min-height:100vh;
+}
+
+.wrap{
+  width:min(1200px,94vw);
+  margin:0 auto;
+  padding:30px 0 80px;
+}
+
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  margin-bottom:20px;
+  flex-wrap:wrap;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+
+.logo{
+  width:48px;
+  height:48px;
+  border-radius:16px;
+  background:linear-gradient(135deg,#40b3ff,#ff78c8);
+  box-shadow:0 10px 30px rgba(0,0,0,0.4);
+}
+
+.brand h1{
+  margin:0;
+  font-size:18px;
+  font-weight:900;
+}
+.brand small{
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+}
+
+.nav{
+  display:flex;
+  gap:10px;
+  flex-wrap:wrap;
+}
+
+.nav a{
+  text-decoration:none;
+  color:var(--text);
+  padding:10px 14px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+}
+
+.card{
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  border-radius:var(--radius);
+  box-shadow:var(--shadow);
+}
+
+.hero{
+  padding:26px;
+  margin-bottom:20px;
+}
+
+.hero h2{
+  margin:0 0 10px;
+  font-size:28px;
+  font-weight:900;
+}
+
+.hero p{
+  margin:0;
+  color:var(--muted);
+  line-height:1.7;
+}
+
+.filter-box{
+  padding:22px;
+  margin-bottom:20px;
+}
+
+.filter-title{
+  margin:0 0 14px;
+  font-size:18px;
+  font-weight:900;
+}
+
+.form-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:14px;
+  align-items:flex-end;
+}
+
+.inputbox{
+  display:flex;
+  flex-direction:column;
+  gap:6px;
+}
+
+.label{
+  font-size:12px;
+  color:var(--muted);
+  font-weight:700;
+}
+
+input[type="date"]{
+  padding:10px 14px;
+  border-radius:14px;
+  border:1px solid var(--border);
+  background:rgba(0,0,0,0.25);
+  color:white;
+  font-weight:700;
+}
+
+.btn{
+  padding:12px 18px;
+  border:none;
+  border-radius:16px;
+  font-weight:900;
+  cursor:pointer;
+  transition:.1s;
+  background:linear-gradient(135deg,#40b3ff,#78ffb0);
+  color:#071021;
+}
+
+.meta{
+  margin-top:14px;
+  color:var(--muted);
+  font-size:12px;
+  line-height:1.7;
+}
+
+.grid{
+  display:grid;
+  grid-template-columns:repeat(3, 1fr);
+  gap:18px;
+}
+
+@media (max-width: 980px){
+  .grid{
+    grid-template-columns:1fr;
+  }
+}
+
+.stat-card{
+  padding:20px;
+}
+
+.stat-card h3{
+  margin:0 0 16px;
+  font-size:20px;
+  font-weight:900;
+}
+
+.stat-card.good{
+  background:var(--good);
+  border-color:var(--goodbd);
+}
+.stat-card.warn{
+  background:var(--warn);
+  border-color:var(--warnbd);
+}
+.stat-card.bad{
+  background:var(--bad);
+  border-color:var(--badbd);
+}
+
+.kv{
+  display:grid;
+  grid-template-columns: 1fr auto;
+  gap:10px;
+  padding:8px 0;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+}
+
+.kv:last-child{
+  border-bottom:none;
+}
+
+.k{
+  color:var(--muted);
+  font-size:13px;
+}
+
+.v{
+  font-weight:900;
+  font-variant-numeric: tabular-nums;
+}
+
+.footer{
+  margin-top:30px;
+  text-align:center;
+  color:rgba(255,255,255,0.55);
+  font-size:12px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>BOATRACE AI</h1>
+        <small>シミュレーション期間集計</small>
+      </div>
+    </div>
+
+    <div class="nav">
+      <a href="/">Home</a>
+      <a href="/sim">期間集計</a>
+    </div>
+  </div>
+
+  <div class="card hero">
+    <h2>任意期間シミュレーション</h2>
+    <p>
+      1年シミュレーションCSVの中から、指定した期間だけを会場別に再集計します。<br>
+      ROI・的中率・投資額・回収額・利益・平均買い目点数を確認できます。
+    </p>
+  </div>
+
+  <div class="card filter-box">
+    <h3 class="filter-title">期間指定</h3>
+
+    <form method="get" action="/sim">
+      <div class="form-row">
+        <div class="inputbox">
+          <div class="label">開始日</div>
+          <input type="date" name="start" value="{{ start_date_html }}" min="{{ available_min_html }}" max="{{ available_max_html }}">
+        </div>
+
+        <div class="inputbox">
+          <div class="label">終了日</div>
+          <input type="date" name="end" value="{{ end_date_html }}" min="{{ available_min_html }}" max="{{ available_max_html }}">
+        </div>
+
+        <button class="btn" type="submit">集計する</button>
+      </div>
+    </form>
+
+    <div class="meta">
+      利用可能期間: {{ available_min_html or "-" }} 〜 {{ available_max_html or "-" }}<br>
+      集計対象行数: {{ sim_meta.row_count }}<br>
+      ※ 本ページの数値は、保存済みシミュレーションCSVを元に集計しています。
+    </div>
+  </div>
+
+  <div class="grid">
+    {% for venue in ["丸亀", "戸田", "児島"] %}
+      {% set row = sim_stats.get(venue, {}) %}
+      {% set roi = row.get("roi", 0) %}
+      {% set card_class = "bad" %}
+      {% if roi >= 1.05 %}
+        {% set card_class = "good" %}
+      {% elif roi >= 1.0 %}
+        {% set card_class = "warn" %}
+      {% endif %}
+
+      <div class="card stat-card {{ card_class }}">
+        <h3>{{ venue }}</h3>
+
+        <div class="kv"><div class="k">レース数</div><div class="v">{{ row.get("race_count", 0) }}</div></div>
+        <div class="kv"><div class="k">購入点数</div><div class="v">{{ row.get("buy_count", 0) }}</div></div>
+        <div class="kv"><div class="k">的中数</div><div class="v">{{ row.get("hit_count", 0) }}</div></div>
+        <div class="kv"><div class="k">的中率</div><div class="v">{{ "%.2f"|format(row.get("hit_rate", 0) * 100) }}%</div></div>
+        <div class="kv"><div class="k">平均買い目点数</div><div class="v">{{ "%.2f"|format(row.get("avg_points", 0)) }}</div></div>
+        <div class="kv"><div class="k">投資額</div><div class="v">{{ "{:,.0f}".format(row.get("total_bets", 0)) }}円</div></div>
+        <div class="kv"><div class="k">回収額</div><div class="v">{{ "{:,.0f}".format(row.get("total_return", 0)) }}円</div></div>
+        <div class="kv"><div class="k">利益</div><div class="v">{{ "{:,.0f}".format(row.get("total_profit", 0)) }}円</div></div>
+        <div class="kv"><div class="k">ROI</div><div class="v">{{ "%.3f"|format(row.get("roi", 0)) }}</div></div>
+      </div>
+    {% endfor %}
+  </div>
+
+  <div class="footer">
+    BoatRace AI Local System<br>
+    <span style="opacity:0.7;">
+      ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。投資・購入は必ず自己責任でお願いします。
+    </span>
+  </div>
+
+</div>
+</body>
+</html>

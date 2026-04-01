@@ -12,6 +12,7 @@ from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
 from engine.racelist_enricher import enrich_entries_with_racelist
 from engine.buy_selector import select_best_bets
 from engine.model_loader_catboost_binary import BinaryCatBoostVenueModel
+from engine.probability_adjuster import apply_lane_bias
 
 JCD_MARUGAME = 15
 JCD_TODA = 2
@@ -29,11 +30,11 @@ class RaceController:
     _odds_cache: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
 
     # TTL秒
-    _TTL_ALL_ENTRIES = 1800      # 30分
-    _TTL_RACE_ENTRIES = 1800     # 30分
-    _TTL_ENRICHED = 1800         # 30分
-    _TTL_BEFOREINFO = 180        # 3分
-    _TTL_ODDS = 180              # 3分
+    _TTL_ALL_ENTRIES = 1800
+    _TTL_RACE_ENTRIES = 1800
+    _TTL_ENRICHED = 1800
+    _TTL_BEFOREINFO = 180
+    _TTL_ODDS = 180
 
     def __init__(self) -> None:
         self.binary_model = BinaryCatBoostVenueModel(
@@ -77,7 +78,6 @@ class RaceController:
         return s
 
     def _trim_old_cache(self) -> None:
-        # 必要最低限の簡易掃除
         now = time.time()
 
         def trim(cache: Dict[Any, Dict[str, Any]], ttl: int) -> None:
@@ -153,6 +153,52 @@ class RaceController:
         return len(rows) == 6 and sorted(lanes) == [1, 2, 3, 4, 5, 6]
 
     # =========================
+    # 確率補正
+    # =========================
+    def _apply_probability_bias_by_venue(
+        self,
+        prob_map: Dict[str, float],
+        venue_name: str,
+    ) -> Dict[str, float]:
+        """
+        会場別にレーン傾向補正を入れる
+        """
+        try:
+            venue_name = self._normalize_venue_name(venue_name)
+
+            if venue_name == "丸亀":
+                return apply_lane_bias(
+                    prob_map,
+                    venue=venue_name,
+                    alpha_first=0.45,
+                    alpha_pair=0.12,
+                )
+            elif venue_name == "戸田":
+                return apply_lane_bias(
+                    prob_map,
+                    venue=venue_name,
+                    alpha_first=0.40,
+                    alpha_pair=0.12,
+                )
+            elif venue_name == "児島":
+                return apply_lane_bias(
+                    prob_map,
+                    venue=venue_name,
+                    alpha_first=0.42,
+                    alpha_pair=0.15,
+                )
+            else:
+                return apply_lane_bias(
+                    prob_map,
+                    venue=venue_name,
+                    alpha_first=0.55,
+                    alpha_pair=0.25,
+                )
+        except Exception as e:
+            print("[WARN] probability bias apply failed:", e)
+            return prob_map
+
+    # =========================
     # 一覧用（場ごと全件）
     # =========================
     def get_all_entries(self, date: str) -> List[Dict[str, Any]]:
@@ -219,7 +265,6 @@ class RaceController:
         if cached is not None:
             return cached
 
-        # まず全件キャッシュがあればそこから切る
         all_entries = self.get_all_entries_toda(date)
         out = []
         for row in all_entries:
@@ -745,11 +790,28 @@ class RaceController:
 
         try:
             prob_map = self.binary_model.predict_proba(df120, venue_name)
-        except Exception:
+        except Exception as e:
+            print("[DEBUG] predict_proba failed:", e)
             prob_map = {}
 
         if not prob_map:
             return out
+
+        ranked = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        print(f"[DEBUG][{venue_name}] controller prob_map top10 BEFORE bias")
+        for combo, p in ranked:
+            print(" ", combo, round(p, 6))
+
+        # いまは原因切り分けのため bias はオフ推奨
+        # prob_map = self._apply_probability_bias_by_venue(
+        #     prob_map=prob_map,
+        #     venue_name=venue_name,
+        # )
+
+        ranked2 = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        print(f"[DEBUG][{venue_name}] controller prob_map top10 AFTER bias")
+        for combo, p in ranked2:
+            print(" ", combo, round(p, 6))
 
         best_bets = self._select_best_bets(
             prob_map=prob_map,
@@ -757,6 +819,19 @@ class RaceController:
             top_n=top_n,
             venue_name=venue_name,
         )
+
+        print(f"[DEBUG][{venue_name}] best_bets top10")
+        for row in best_bets[:10]:
+            print(
+                " ",
+                row.get("combo", ""),
+                "prob=",
+                round(float(row.get("prob", row.get("score", 0.0))), 6),
+                "odds=",
+                round(float(row.get("odds", 0.0)), 2),
+                "ev=",
+                round(float(row.get("ev", 0.0)), 6),
+            )
 
         out["best_bets"] = best_bets
         out["prob_map"] = prob_map

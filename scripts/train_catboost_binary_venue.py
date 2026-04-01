@@ -1,28 +1,22 @@
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import Dict, List, Tuple
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 
-from engine.feature_builder_current import (
-    add_feature_block,
-    build_is_hit,
-    feature_columns,
-    normalize_venue,
-    sanitize_x,
-)
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
+DATASET_DIR = PROJECT_ROOT / "data" / "datasets"
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
 
-TARGET_VENUES = ["丸亀", "児島", "戸田"]
-ROWS_PER_RACE = 120
-
-TRAIN_TO = "20251231"
-VALID_TO = "20260228"
+VENUE_DATASETS = {
+    "丸亀": DATASET_DIR / "trifecta_train_small_marugame.csv",
+    "戸田": DATASET_DIR / "trifecta_train_small_toda.csv",
+    "児島": DATASET_DIR / "trifecta_train_small_kojima.csv",
+}
 
 
 def _require_catboost():
@@ -33,287 +27,416 @@ def _require_catboost():
         raise RuntimeError("catboost が入っていません。 `pip install catboost`") from e
 
 
-def _safe_str(v) -> str:
-    if v is None:
-        return ""
-    return str(v).strip()
+def normalize_venue(v: Any) -> str:
+    s = str(v or "").strip()
+    if "丸亀" in s:
+        return "丸亀"
+    if "戸田" in s:
+        return "戸田"
+    if "児島" in s:
+        return "児島"
+    return s
 
 
-def _time_split(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+def sanitize_x(df: pd.DataFrame, feature_cols: List[str]) -> pd.DataFrame:
     out = df.copy()
-    out["date"] = out["date"].astype(str)
 
-    train_df = out[out["date"] <= TRAIN_TO].copy()
-    valid_df = out[(out["date"] > TRAIN_TO) & (out["date"] <= VALID_TO)].copy()
-    test_df = out[out["date"] > VALID_TO].copy()
+    for col in feature_cols:
+        if col not in out.columns:
+            out[col] = 0
+
+    out = out[feature_cols].copy()
+
+    for col in out.columns:
+        if pd.api.types.is_numeric_dtype(out[col]):
+            out[col] = out[col].fillna(0)
+        else:
+            out[col] = out[col].astype(str).fillna("")
+
+    return out
+
+
+def add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    # comboを split して、first/second/third の対象艇を引くためだけに使う
+    if "combo" in out.columns:
+        parts = out["combo"].astype(str).str.split("-", expand=True)
+        if parts.shape[1] >= 3:
+            out["combo_first_lane"] = pd.to_numeric(parts[0], errors="coerce").fillna(0).astype("int16")
+            out["combo_second_lane"] = pd.to_numeric(parts[1], errors="coerce").fillna(0).astype("int16")
+            out["combo_third_lane"] = pd.to_numeric(parts[2], errors="coerce").fillna(0).astype("int16")
+        else:
+            out["combo_first_lane"] = 0
+            out["combo_second_lane"] = 0
+            out["combo_third_lane"] = 0
+
+    wind_map = {
+        "無風": 0,
+        "北": 1, "北東": 2, "東": 3, "南東": 4,
+        "南": 5, "南西": 6, "西": 7, "北西": 8,
+    }
+    if "wind_dir" in out.columns:
+        out["wind_dir_code"] = out["wind_dir"].astype(str).map(wind_map).fillna(0).astype("int16")
+    else:
+        out["wind_dir_code"] = 0
+
+    weather_map = {
+        "晴": 1, "晴れ": 1,
+        "曇": 2, "曇り": 2,
+        "雨": 3,
+        "雪": 4,
+    }
+    if "weather" in out.columns:
+        out["weather_code"] = out["weather"].astype(str).map(weather_map).fillna(0).astype("int16")
+    else:
+        out["weather_code"] = 0
+
+    for lane in range(1, 7):
+        st_col = f"lane{lane}_st"
+        ex_col = f"lane{lane}_exhibit"
+        course_col = f"lane{lane}_course"
+        motor_col = f"lane{lane}_motor"
+        boat_col = f"lane{lane}_boat"
+        racer_col = f"lane{lane}_racer_no"
+
+        for c in [st_col, ex_col, course_col, motor_col, boat_col, racer_col]:
+            if c not in out.columns:
+                out[c] = 0
+
+        out[st_col] = pd.to_numeric(out[st_col], errors="coerce").fillna(0).astype("float32")
+        out[ex_col] = pd.to_numeric(out[ex_col], errors="coerce").fillna(0).astype("float32")
+        out[course_col] = pd.to_numeric(out[course_col], errors="coerce").fillna(0).astype("int16")
+        out[motor_col] = pd.to_numeric(out[motor_col], errors="coerce").fillna(0).astype("int16")
+        out[boat_col] = pd.to_numeric(out[boat_col], errors="coerce").fillna(0).astype("int16")
+        out[racer_col] = pd.to_numeric(out[racer_col], errors="coerce").fillna(0).astype("int32")
+
+        out[f"lane{lane}_st_inv"] = (0.3 - out[st_col]).clip(lower=-1, upper=1).astype("float32")
+        out[f"lane{lane}_exhibit_inv"] = (7.5 - out[ex_col]).clip(lower=-2, upper=2).astype("float32")
+        out[f"lane{lane}_course_diff"] = (out[course_col] - lane).astype("int16")
+
+    # comboで指定された1着/2着/3着候補の特徴量を作る
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        out[f"{pos}_st"] = 0.0
+        out[f"{pos}_exhibit"] = 0.0
+        out[f"{pos}_course"] = 0
+        out[f"{pos}_motor"] = 0
+        out[f"{pos}_boat"] = 0
+        out[f"{pos}_racer_no"] = 0
+
+        for lane in range(1, 7):
+            mask = out[pos_name] == lane
+            out.loc[mask, f"{pos}_st"] = out.loc[mask, f"lane{lane}_st"]
+            out.loc[mask, f"{pos}_exhibit"] = out.loc[mask, f"lane{lane}_exhibit"]
+            out.loc[mask, f"{pos}_course"] = out.loc[mask, f"lane{lane}_course"]
+            out.loc[mask, f"{pos}_motor"] = out.loc[mask, f"lane{lane}_motor"]
+            out.loc[mask, f"{pos}_boat"] = out.loc[mask, f"lane{lane}_boat"]
+            out.loc[mask, f"{pos}_racer_no"] = out.loc[mask, f"lane{lane}_racer_no"]
+
+    out["first_second_st_diff"] = (out["first_st"] - out["second_st"]).astype("float32")
+    out["first_third_st_diff"] = (out["first_st"] - out["third_st"]).astype("float32")
+    out["first_second_exhibit_diff"] = (out["first_exhibit"] - out["second_exhibit"]).astype("float32")
+    out["first_third_exhibit_diff"] = (out["first_exhibit"] - out["third_exhibit"]).astype("float32")
+
+    if "wind_speed_mps" not in out.columns:
+        out["wind_speed_mps"] = 0.0
+    if "wave_cm" not in out.columns:
+        out["wave_cm"] = 0.0
+
+    out["wind_speed_mps"] = pd.to_numeric(out["wind_speed_mps"], errors="coerce").fillna(0).astype("float32")
+    out["wave_cm"] = pd.to_numeric(out["wave_cm"], errors="coerce").fillna(0).astype("float32")
+
+    return out
+
+
+def get_feature_cols(with_racer_no: bool) -> List[str]:
+    # 重要:
+    # combo_first_lane / combo_second_lane / combo_third_lane は
+    # 学習特徴量から外す
+    cols = [
+        "wind_dir_code",
+        "weather_code",
+        "wind_speed_mps",
+        "wave_cm",
+
+        "first_st",
+        "second_st",
+        "third_st",
+        "first_exhibit",
+        "second_exhibit",
+        "third_exhibit",
+        "first_course",
+        "second_course",
+        "third_course",
+        "first_motor",
+        "second_motor",
+        "third_motor",
+        "first_boat",
+        "second_boat",
+        "third_boat",
+
+        "first_second_st_diff",
+        "first_third_st_diff",
+        "first_second_exhibit_diff",
+        "first_third_exhibit_diff",
+    ]
+
+    for lane in range(1, 7):
+        cols += [
+            f"lane{lane}_st",
+            f"lane{lane}_exhibit",
+            f"lane{lane}_course",
+            f"lane{lane}_motor",
+            f"lane{lane}_boat",
+            f"lane{lane}_st_inv",
+            f"lane{lane}_exhibit_inv",
+            f"lane{lane}_course_diff",
+        ]
+
+    if with_racer_no:
+        cols += [
+            "first_racer_no",
+            "second_racer_no",
+            "third_racer_no",
+        ]
+        for lane in range(1, 7):
+            cols.append(f"lane{lane}_racer_no")
+
+    return cols
+
+
+def load_dataset(csv_path: Path, venue: str) -> pd.DataFrame:
+    if not csv_path.exists():
+        raise FileNotFoundError(csv_path)
+
+    usecols = [
+        "date", "venue", "race_key", "race_no", "combo", "y",
+        "wave_cm", "weather", "wind_dir", "wind_speed_mps",
+        "lane1_boat", "lane1_course", "lane1_exhibit", "lane1_motor", "lane1_racer_no", "lane1_st",
+        "lane2_boat", "lane2_course", "lane2_exhibit", "lane2_motor", "lane2_racer_no", "lane2_st",
+        "lane3_boat", "lane3_course", "lane3_exhibit", "lane3_motor", "lane3_racer_no", "lane3_st",
+        "lane4_boat", "lane4_course", "lane4_exhibit", "lane4_motor", "lane4_racer_no", "lane4_st",
+        "lane5_boat", "lane5_course", "lane5_exhibit", "lane5_motor", "lane5_racer_no", "lane5_st",
+        "lane6_boat", "lane6_course", "lane6_exhibit", "lane6_motor", "lane6_racer_no", "lane6_st",
+    ]
+
+    df = pd.read_csv(csv_path, usecols=usecols, low_memory=False)
+    df["venue"] = df["venue"].astype(str).map(normalize_venue)
+    df = df[df["venue"] == venue].copy()
+
+    if df.empty:
+        raise RuntimeError(f"{venue}: dataset empty after venue filter")
+
+    df["date"] = df["date"].astype(str)
+    df["y"] = pd.to_numeric(df["y"], errors="coerce").fillna(0).astype("int8")
+
+    return df.reset_index(drop=True)
+
+
+def split_by_date(df: pd.DataFrame) -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame]:
+    race_dates = (
+        df[["race_key", "date"]]
+        .drop_duplicates()
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    n = len(race_dates)
+    if n < 10:
+        raise RuntimeError("race count too small for split")
+
+    train_end = int(n * 0.70)
+    valid_end = int(n * 0.85)
+
+    train_keys = set(race_dates.iloc[:train_end]["race_key"].tolist())
+    valid_keys = set(race_dates.iloc[train_end:valid_end]["race_key"].tolist())
+    test_keys = set(race_dates.iloc[valid_end:]["race_key"].tolist())
+
+    train_df = df[df["race_key"].isin(train_keys)].copy()
+    valid_df = df[df["race_key"].isin(valid_keys)].copy()
+    test_df = df[df["race_key"].isin(test_keys)].copy()
+
     return train_df, valid_df, test_df
 
 
-def _topk_hits(prob_map: Dict[str, float], y_combo: str, k: int) -> int:
-    if not prob_map or not y_combo:
-        return 0
-    topk = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:k]
-    combos = [c for c, _ in topk]
-    return 1 if y_combo in combos else 0
+def evaluate_topk(prob: List[float], race_keys: List[str], combos: List[str], y: List[int]) -> Dict[str, float]:
+    eval_df = pd.DataFrame({
+        "race_key": race_keys,
+        "combo": combos,
+        "prob": prob,
+        "y": y,
+    })
 
-
-def _eval_binary_model(model, feature_cols: List[str], df: pd.DataFrame) -> Dict[str, float]:
     races = 0
     top1 = 0
     top3 = 0
     top5 = 0
 
-    if df.empty:
-        return {"races": 0, "top1": 0.0, "top3": 0.0, "top5": 0.0}
-
-    for race_key, df120 in df.groupby("race_key", sort=False):
-        if len(df120) != ROWS_PER_RACE:
+    for _, g in eval_df.groupby("race_key", sort=False):
+        if len(g) != 120:
             continue
 
-        x = sanitize_x(df120, feature_cols)
-        prob = model.predict_proba(x)[:, 1]
-
-        prob_map = {c: float(p) for c, p in zip(df120["combo"].astype(str).tolist(), prob)}
-        s = sum(prob_map.values())
-        if s > 0:
-            prob_map = {k: v / s for k, v in prob_map.items()}
-
-        y_combo = _safe_str(df120.iloc[0].get("y_combo"))
-
         races += 1
-        top1 += _topk_hits(prob_map, y_combo, 1)
-        top3 += _topk_hits(prob_map, y_combo, 3)
-        top5 += _topk_hits(prob_map, y_combo, 5)
+        g = g.sort_values("prob", ascending=False).reset_index(drop=True)
+
+        top1 += int(g.iloc[:1]["y"].max())
+        top3 += int(g.iloc[:3]["y"].max())
+        top5 += int(g.iloc[:5]["y"].max())
+
+    if races == 0:
+        return {"races": 0, "top1": 0.0, "top3": 0.0, "top5": 0.0}
 
     return {
         "races": races,
-        "top1": top1 / races if races else 0.0,
-        "top3": top3 / races if races else 0.0,
-        "top5": top5 / races if races else 0.0,
+        "top1": top1 / races,
+        "top3": top3 / races,
+        "top5": top5 / races,
     }
 
 
-def _filter_feature_cols(base_cols: List[str], use_racer_no: bool) -> List[str]:
-    cols = []
-    for c in base_cols:
-        cl = c.lower()
-
-        if "y_class" in cl:
-            continue
-        if "finish" in cl:
-            continue
-        if "payout" in cl:
-            continue
-        if cl in {"y", "is_hit", "y_combo"}:
-            continue
-
-        if not use_racer_no and "racer_no" in cl:
-            continue
-
-        cols.append(c)
-
-    return cols
-
-
-def _train_single_variant(
-    *,
+def train_one_pattern(
     venue: str,
-    variant_name: str,
-    train_df: pd.DataFrame,
-    valid_df: pd.DataFrame,
-    test_df: pd.DataFrame,
-    use_racer_no: bool,
-) -> Dict[str, object]:
+    df: pd.DataFrame,
+    with_racer_no: bool,
+) -> Tuple[Any, Dict[str, Any]]:
     CatBoostClassifier = _require_catboost()
 
-    work_train = train_df.copy()
-    work_valid = valid_df.copy()
-    work_test = test_df.copy()
+    work = add_feature_block(df.copy())
+    feature_cols = get_feature_cols(with_racer_no)
 
-    work_train["is_hit"] = build_is_hit(work_train)
-    if not work_valid.empty:
-        work_valid["is_hit"] = build_is_hit(work_valid)
-    if not work_test.empty:
-        work_test["is_hit"] = build_is_hit(work_test)
+    train_df, valid_df, test_df = split_by_date(work)
 
-    base_cols = feature_columns(work_train)
-    cols = _filter_feature_cols(base_cols, use_racer_no=use_racer_no)
+    x_train = sanitize_x(train_df, feature_cols)
+    y_train = train_df["y"].astype("int8")
 
-    if not cols:
-        raise RuntimeError(f"{venue}/{variant_name}: feature_cols empty")
+    x_valid = sanitize_x(valid_df, feature_cols)
+    y_valid = valid_df["y"].astype("int8")
 
-    suspicious = [c for c in cols if "y_class" in c.lower() or "finish" in c.lower() or "payout" in c.lower()]
-    if suspicious:
-        raise RuntimeError(f"{venue}/{variant_name}: leak-like cols found in feature_cols: {suspicious[:20]}")
-
-    x_train = sanitize_x(work_train, cols)
-    y_train = work_train["is_hit"].astype(int)
+    x_test = sanitize_x(test_df, feature_cols)
+    y_test = test_df["y"].astype("int8")
 
     model = CatBoostClassifier(
         loss_function="Logloss",
         eval_metric="Logloss",
-        iterations=700,
+        iterations=600,
+        depth=6,
         learning_rate=0.04,
-        depth=8,
-        l2_leaf_reg=6.0,
         random_seed=42,
-        verbose=False,
-        auto_class_weights="Balanced",
+        verbose=50,
+        allow_writing_files=False,
+        class_weights=[1.0, 10.0],
     )
 
-    model.fit(x_train, y_train)
+    model.fit(
+        x_train,
+        y_train,
+        eval_set=(x_valid, y_valid),
+        use_best_model=True,
+    )
 
-    valid_eval = _eval_binary_model(model, cols, work_valid) if not work_valid.empty else {}
-    test_eval = _eval_binary_model(model, cols, work_test) if not work_test.empty else {}
+    valid_prob = model.predict_proba(x_valid)[:, 1]
+    test_prob = model.predict_proba(x_test)[:, 1]
 
-    MODEL_DIR.mkdir(parents=True, exist_ok=True)
+    valid_eval = evaluate_topk(
+        prob=valid_prob.tolist(),
+        race_keys=valid_df["race_key"].astype(str).tolist(),
+        combos=valid_df["combo"].astype(str).tolist(),
+        y=valid_df["y"].astype(int).tolist(),
+    )
+    test_eval = evaluate_topk(
+        prob=test_prob.tolist(),
+        race_keys=test_df["race_key"].astype(str).tolist(),
+        combos=test_df["combo"].astype(str).tolist(),
+        y=test_df["y"].astype(int).tolist(),
+    )
 
-    suffix = "with_racer_no" if use_racer_no else "without_racer_no"
+    info = {
+        "venue": venue,
+        "with_racer_no": with_racer_no,
+        "feature_cols": feature_cols,
+        "train_rows": int(len(train_df)),
+        "valid_rows": int(len(valid_df)),
+        "test_rows": int(len(test_df)),
+        "valid_eval": valid_eval,
+        "test_eval": test_eval,
+        "train_params": {
+            "iterations": 600,
+            "depth": 6,
+            "learning_rate": 0.04,
+            "class_weights": [1.0, 10.0],
+        },
+    }
+    return model, info
+
+
+def save_model_and_meta(model: Any, info: Dict[str, Any], suffix: str) -> Tuple[Path, Path]:
+    venue = info["venue"]
     model_path = MODEL_DIR / f"trifecta_binary_catboost_{venue}_{suffix}.cbm"
     meta_path = MODEL_DIR / f"trifecta_binary_catboost_{venue}_{suffix}_meta.json"
 
+    MODEL_DIR.mkdir(parents=True, exist_ok=True)
     model.save_model(str(model_path))
 
-    meta = {
-        "model_type": "catboost_binary_safe_whitelist_ab",
-        "venue": venue,
-        "variant_name": variant_name,
-        "use_racer_no": use_racer_no,
-        "feature_cols": cols,
-        "train_to": TRAIN_TO,
-        "valid_to": VALID_TO,
-        "n_rows_train": int(len(work_train)),
-        "n_rows_valid": int(len(work_valid)),
-        "n_rows_test": int(len(work_test)),
-        "feature_count": len(cols),
-        "valid_eval": valid_eval,
-        "test_eval": test_eval,
-    }
-
     with open(meta_path, "w", encoding="utf-8") as f:
-        json.dump(meta, f, ensure_ascii=False, indent=2)
+        json.dump(info, f, ensure_ascii=False, indent=2)
 
-    print(f"\n--- {venue} / {variant_name} ---")
-    print("saved model   :", model_path)
-    print("saved meta    :", meta_path)
-    print("feature_count :", len(cols))
-    print("use_racer_no  :", use_racer_no)
-    print("valid_eval    :", valid_eval)
-    print("test_eval     :", test_eval)
-
-    return {
-        "variant_name": variant_name,
-        "use_racer_no": use_racer_no,
-        "feature_count": len(cols),
-        "valid_eval": valid_eval,
-        "test_eval": test_eval,
-        "model_path": str(model_path),
-        "meta_path": str(meta_path),
-    }
-
-
-def _print_compare_table(venue: str, results: List[Dict[str, object]]) -> None:
-    print("\n" + "=" * 100)
-    print(f"COMPARE SUMMARY - {venue}")
-    print("=" * 100)
-
-    for r in results:
-        valid_eval = r.get("valid_eval", {}) or {}
-        test_eval = r.get("test_eval", {}) or {}
-        print(
-            f"{r['variant_name']:20s} | "
-            f"features={int(r['feature_count']):3d} | "
-            f"valid top1={float(valid_eval.get('top1', 0.0)):.4f} "
-            f"top3={float(valid_eval.get('top3', 0.0)):.4f} "
-            f"top5={float(valid_eval.get('top5', 0.0)):.4f} | "
-            f"test top1={float(test_eval.get('top1', 0.0)):.4f} "
-            f"top3={float(test_eval.get('top3', 0.0)):.4f} "
-            f"top5={float(test_eval.get('top5', 0.0)):.4f}"
-        )
-
-    def score(res: Dict[str, object]) -> float:
-        te = res.get("test_eval", {}) or {}
-        return (
-            float(te.get("top1", 0.0)) * 0.40
-            + float(te.get("top3", 0.0)) * 0.35
-            + float(te.get("top5", 0.0)) * 0.25
-        )
-
-    best = max(results, key=score)
-    print("\nBEST BY WEIGHTED TEST SCORE:")
-    print(
-        f"{best['variant_name']} "
-        f"(use_racer_no={best['use_racer_no']}, "
-        f"score={score(best):.6f})"
-    )
-
-
-def train_one_venue(df: pd.DataFrame, venue: str) -> None:
-    vdf = df[df["venue"].astype(str).map(normalize_venue) == venue].copy()
-    if vdf.empty:
-        print(f"[SKIP] {venue}: no rows")
-        return
-
-    train_df, valid_df, test_df = _time_split(vdf)
-
-    print(f"\n===== {venue} =====")
-    print("train rows:", len(train_df))
-    print("valid rows:", len(valid_df))
-    print("test rows :", len(test_df))
-
-    if train_df.empty:
-        print(f"[SKIP] {venue}: train empty")
-        return
-
-    train_df = add_feature_block(train_df)
-    if not valid_df.empty:
-        valid_df = add_feature_block(valid_df)
-    if not test_df.empty:
-        test_df = add_feature_block(test_df)
-
-    results: List[Dict[str, object]] = []
-
-    results.append(
-        _train_single_variant(
-            venue=venue,
-            variant_name="with_racer_no",
-            train_df=train_df,
-            valid_df=valid_df,
-            test_df=test_df,
-            use_racer_no=True,
-        )
-    )
-
-    results.append(
-        _train_single_variant(
-            venue=venue,
-            variant_name="without_racer_no",
-            train_df=train_df,
-            valid_df=valid_df,
-            test_df=test_df,
-            use_racer_no=False,
-        )
-    )
-
-    _print_compare_table(venue, results)
+    return model_path, meta_path
 
 
 def main() -> None:
-    if not DATASET_PATH.exists():
-        raise FileNotFoundError(DATASET_PATH)
+    print("===== train_catboost_binary_venue NO-COMBO-LANE START =====")
 
-    df = pd.read_csv(DATASET_PATH, low_memory=False)
+    for venue, csv_path in VENUE_DATASETS.items():
+        print(f"\n===== {venue} =====")
+        print("dataset:", csv_path)
 
-    required_cols = {"date", "venue", "race_key", "combo", "y_combo"}
-    missing = [c for c in required_cols if c not in df.columns]
-    if missing:
-        raise RuntimeError(f"Missing required columns: {missing}")
+        df = load_dataset(csv_path, venue)
+        print("rows:", len(df))
+        print("races:", df["race_key"].nunique())
 
-    for venue in TARGET_VENUES:
-        try:
-            train_one_venue(df, venue)
-        except Exception as e:
-            print(f"[ERROR] {venue}: {e}")
+        results: List[Tuple[str, Any, Dict[str, Any]]] = []
+
+        for suffix, with_racer_no in [
+            ("with_racer_no", True),
+            ("without_racer_no", False),
+        ]:
+            print(f"\n--- pattern: {suffix} ---")
+            model, info = train_one_pattern(
+                venue=venue,
+                df=df,
+                with_racer_no=with_racer_no,
+            )
+
+            model_path, meta_path = save_model_and_meta(model, info, suffix=suffix)
+
+            print("train rows:", info["train_rows"])
+            print("valid rows:", info["valid_rows"])
+            print("test rows :", info["test_rows"])
+            print("saved model:", model_path)
+            print("saved meta :", meta_path)
+            print("valid_eval:", info["valid_eval"])
+            print("test_eval :", info["test_eval"])
+
+            results.append((suffix, model, info))
+
+        best_suffix, _, best_info = sorted(
+            results,
+            key=lambda x: (
+                x[2]["test_eval"]["top5"],
+                x[2]["test_eval"]["top3"],
+                x[2]["test_eval"]["top1"],
+            ),
+            reverse=True,
+        )[0]
+
+        print(f"\n>>> BEST for {venue}: {best_suffix}")
+        print("best test_eval:", best_info["test_eval"])
+
+    print("\n===== train_catboost_binary_venue NO-COMBO-LANE DONE =====")
 
 
 if __name__ == "__main__":

@@ -5,7 +5,7 @@ import traceback
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Tuple
 
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
@@ -22,7 +22,7 @@ from engine.prediction_logger import build_prediction_rows, save_prediction_rows
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MERGED_LOG_PATH = PROJECT_ROOT / "data" / "logs" / "prediction_results_merged.csv"
+MERGED_LOG_PATH = PROJECT_ROOT / "data" / "logs" / "prediction_results_merged_sim_1y.csv"
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -36,6 +36,21 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
 
 def _today() -> str:
     return datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y%m%d")
+
+
+def _today_html_date() -> str:
+    return datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
+
+
+def _ymd_to_html_date(ymd: str) -> str:
+    s = str(ymd or "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[0:4]}-{s[4:6]}-{s[6:8]}"
+    return ""
+
+
+def _html_date_to_ymd(s: str) -> str:
+    return str(s or "").replace("-", "").strip()
 
 
 def _blank_races() -> List[Dict[str, Any]]:
@@ -137,57 +152,90 @@ def _normalize_venue_name(v: str) -> str:
     return s
 
 
-def _build_home_stats() -> Dict[str, Dict[str, Any]]:
-    venue_order = ["丸亀", "戸田", "児島"]
-    empty_row = {
-        "buy_count": 0,
-        "hit_count": 0,
-        "hit_rate": 0.0,
-        "total_bets": 0.0,
-        "total_return": 0.0,
-        "total_profit": 0.0,
-        "roi": 0.0,
-    }
-    out = {v: dict(empty_row) for v in venue_order}
-
+def _load_sim_log_df() -> pd.DataFrame:
     if not MERGED_LOG_PATH.exists():
-        return out
+        return pd.DataFrame()
 
     try:
         df = pd.read_csv(MERGED_LOG_PATH)
     except Exception as e:
         print("[WARN] failed to read merged log:", e)
-        return out
+        return pd.DataFrame()
+
+    if df.empty:
+        return df
+
+    if "venue" in df.columns:
+        df["venue_norm"] = df["venue"].astype(str).map(_normalize_venue_name)
+    else:
+        df["venue_norm"] = ""
+
+    if "date" in df.columns:
+        df["date"] = df["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
+
+    for col in ["is_selected", "is_hit"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
+        else:
+            df[col] = 0
+
+    for col in ["bet_cost_yen", "return_yen", "profit_yen"]:
+        if col in df.columns:
+            df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
+        else:
+            df[col] = 0.0
+
+    return df
+
+
+def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
+    venue_order = ["丸亀", "戸田", "児島"]
+    empty_row = {
+        "race_count": 0,
+        "buy_count": 0,
+        "hit_count": 0,
+        "hit_rate": 0.0,
+        "avg_points": 0.0,
+        "total_bets": 0.0,
+        "total_return": 0.0,
+        "total_profit": 0.0,
+        "roi": 0.0,
+    }
+
+    out = {v: dict(empty_row) for v in venue_order}
 
     if df.empty:
         return out
 
-    if "venue" not in df.columns or "is_selected" not in df.columns:
-        return out
-
-    df["venue_norm"] = df["venue"].astype(str).map(_normalize_venue_name)
-    df = df[df["is_selected"] == 1].copy()
-
-    if df.empty:
+    selected_df = df[df["is_selected"] == 1].copy()
+    if selected_df.empty:
         return out
 
     for venue in venue_order:
-        vdf = df[df["venue_norm"] == venue].copy()
+        vdf = selected_df[selected_df["venue_norm"] == venue].copy()
         if vdf.empty:
             continue
 
         buy_count = int(len(vdf))
-        hit_count = int((vdf["is_hit"] == 1).sum()) if "is_hit" in vdf.columns else 0
-        total_bets = float(vdf["bet_cost_yen"].fillna(0).sum()) if "bet_cost_yen" in vdf.columns else 0.0
-        total_return = float(vdf["return_yen"].fillna(0).sum()) if "return_yen" in vdf.columns else 0.0
+        hit_count = int((vdf["is_hit"] == 1).sum())
+        total_bets = float(vdf["bet_cost_yen"].sum())
+        total_return = float(vdf["return_yen"].sum())
         total_profit = total_return - total_bets
-        hit_rate = (hit_count / buy_count) if buy_count > 0 else 0.0
-        roi = (total_return / total_bets) if total_bets > 0 else 0.0
+        hit_rate = hit_count / buy_count if buy_count > 0 else 0.0
+        roi = total_return / total_bets if total_bets > 0 else 0.0
+
+        race_count = 0
+        if "date" in vdf.columns and "race_no" in vdf.columns:
+            race_count = int(vdf[["date", "race_no"]].drop_duplicates().shape[0])
+
+        avg_points = buy_count / race_count if race_count > 0 else 0.0
 
         out[venue] = {
+            "race_count": race_count,
             "buy_count": buy_count,
             "hit_count": hit_count,
             "hit_rate": hit_rate,
+            "avg_points": avg_points,
             "total_bets": total_bets,
             "total_return": total_return,
             "total_profit": total_profit,
@@ -195,6 +243,38 @@ def _build_home_stats() -> Dict[str, Dict[str, Any]]:
         }
 
     return out
+
+
+def _build_home_stats() -> Dict[str, Dict[str, Any]]:
+    df = _load_sim_log_df()
+    return _aggregate_stats_from_df(df)
+
+
+def _build_sim_stats(start_date: str, end_date: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
+    df = _load_sim_log_df()
+    meta = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "available_min_date": "",
+        "available_max_date": "",
+        "row_count": 0,
+    }
+
+    if df.empty:
+        return _aggregate_stats_from_df(df), meta
+
+    if "date" in df.columns and not df["date"].empty:
+        meta["available_min_date"] = str(df["date"].min())
+        meta["available_max_date"] = str(df["date"].max())
+
+    if start_date:
+        df = df[df["date"] >= start_date].copy()
+    if end_date:
+        df = df[df["date"] <= end_date].copy()
+
+    meta["row_count"] = int(len(df))
+    stats = _aggregate_stats_from_df(df)
+    return stats, meta
 
 
 def _debug_render_log(
@@ -220,6 +300,29 @@ def _debug_render_log(
     print("[DEBUG] probabilities :", len(probabilities))
     print("[DEBUG] ev_result     :", len(ev_result))
     print("[DEBUG] odds exists   :", bool(grouped_odds and grouped_odds.get("data")))
+
+    if probabilities:
+        top_probs = sorted(probabilities.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        print("[DEBUG] render probabilities top10")
+        for combo, p in top_probs:
+            print(" ", combo, round(p, 6))
+
+    if best_bets:
+        print("[DEBUG] best_bets top10")
+        for row in best_bets[:10]:
+            prob = float(row.get("prob", row.get("score", 0.0)) or 0.0)
+            odds = float(row.get("odds_raw", row.get("odds", 0.0)) or 0.0)
+            ev = float(row.get("ev_raw", row.get("ev", 0.0)) or 0.0)
+            print(
+                " ",
+                row.get("combo", ""),
+                "prob=",
+                round(prob, 6),
+                "odds=",
+                round(odds, 2),
+                "ev=",
+                round(ev, 6),
+            )
 
 
 def _get_entries_and_beforeinfo(controller: RaceController, venue: str, date: str, race_no: int):
@@ -395,6 +498,35 @@ def home():
         "home.html",
         date=_today(),
         home_stats=home_stats,
+    )
+
+
+@app.route("/sim")
+def sim_stats():
+    df = _load_sim_log_df()
+
+    available_min = ""
+    available_max = ""
+    if not df.empty and "date" in df.columns:
+        available_min = str(df["date"].min())
+        available_max = str(df["date"].max())
+
+    start_arg = request.args.get("start", "").strip()
+    end_arg = request.args.get("end", "").strip()
+
+    start_date = _html_date_to_ymd(start_arg) if start_arg else available_min
+    end_date = _html_date_to_ymd(end_arg) if end_arg else available_max
+
+    stats, meta = _build_sim_stats(start_date=start_date, end_date=end_date)
+
+    return render_template(
+        "sim_stats.html",
+        sim_stats=stats,
+        start_date_html=_ymd_to_html_date(start_date),
+        end_date_html=_ymd_to_html_date(end_date),
+        available_min_html=_ymd_to_html_date(meta.get("available_min_date", "")),
+        available_max_html=_ymd_to_html_date(meta.get("available_max_date", "")),
+        sim_meta=meta,
     )
 
 
