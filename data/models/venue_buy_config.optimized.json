@@ -1,0 +1,41 @@
+{
+  "丸亀": {
+    "min_prob": 0.0164,
+    "max_odds_cap": 42.4,
+    "max_ev_cap": 2.4,
+    "weight_prob": 0.599,
+    "weight_ev": 0.27,
+    "weight_odds": 0.131,
+    "prob_exp": 1.358,
+    "ev_exp": 0.68,
+    "base_bonus": 0.704,
+    "min_points": 5,
+    "max_points": 7
+  },
+  "戸田": {
+    "min_prob": 0.0206,
+    "max_odds_cap": 107.6,
+    "max_ev_cap": 2.14,
+    "weight_prob": 0.462,
+    "weight_ev": 0.256,
+    "weight_odds": 0.282,
+    "prob_exp": 1.024,
+    "ev_exp": 0.794,
+    "base_bonus": 0.574,
+    "min_points": 5,
+    "max_points": 6
+  },
+  "児島": {
+    "min_prob": 0.0135,
+    "max_odds_cap": 73.7,
+    "max_ev_cap": 3.08,
+    "weight_prob": 0.597,
+    "weight_ev": 0.261,
+    "weight_odds": 0.142,
+    "prob_exp": 1.11,
+    "ev_exp": 0.83,
+    "base_bonus": 0.641,
+    "min_points": 5,
+    "max_points": 10
+  }
+}

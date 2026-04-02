@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 import traceback
 from datetime import datetime
@@ -22,7 +23,11 @@ from engine.prediction_logger import build_prediction_rows, save_prediction_rows
 app = Flask(__name__, template_folder="templates", static_folder="static")
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
-MERGED_LOG_PATH = PROJECT_ROOT / "data" / "logs" / "prediction_results_merged_sim_1y.csv"
+LOG_DIR = PROJECT_ROOT / "data" / "logs"
+
+# 軽量ファイル
+HOME_STATS_JSON_PATH = LOG_DIR / "home_stats_1y.json"
+SIM_LIGHT_CSV_PATH = LOG_DIR / "prediction_results_sim_1y_light.csv"
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -36,10 +41,6 @@ def _safe_float(x: Any, default: float = 0.0) -> float:
 
 def _today() -> str:
     return datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y%m%d")
-
-
-def _today_html_date() -> str:
-    return datetime.now(ZoneInfo("Asia/Tokyo")).strftime("%Y-%m-%d")
 
 
 def _ymd_to_html_date(ymd: str) -> str:
@@ -152,14 +153,59 @@ def _normalize_venue_name(v: str) -> str:
     return s
 
 
-def _load_sim_log_df() -> pd.DataFrame:
-    if not MERGED_LOG_PATH.exists():
+def _empty_stats_map() -> Dict[str, Dict[str, Any]]:
+    venue_order = ["丸亀", "戸田", "児島"]
+    empty_row = {
+        "race_count": 0,
+        "buy_count": 0,
+        "hit_count": 0,
+        "hit_rate": 0.0,
+        "avg_points": 0.0,
+        "total_bets": 0.0,
+        "total_return": 0.0,
+        "total_profit": 0.0,
+        "roi": 0.0,
+    }
+    return {v: dict(empty_row) for v in venue_order}
+
+
+def _load_home_stats_json() -> Dict[str, Dict[str, Any]]:
+    if not HOME_STATS_JSON_PATH.exists():
+        return _empty_stats_map()
+
+    try:
+        with open(HOME_STATS_JSON_PATH, "r", encoding="utf-8") as f:
+            data = json.load(f)
+    except Exception as e:
+        print("[WARN] failed to read home_stats json:", e)
+        return _empty_stats_map()
+
+    stats = data.get("stats", {})
+    out = _empty_stats_map()
+    for venue in ["丸亀", "戸田", "児島"]:
+        if venue in stats and isinstance(stats[venue], dict):
+            out[venue].update(stats[venue])
+    return out
+
+
+def _load_sim_light_df() -> pd.DataFrame:
+    if not SIM_LIGHT_CSV_PATH.exists():
         return pd.DataFrame()
 
     try:
-        df = pd.read_csv(MERGED_LOG_PATH)
+        # 必要列だけの軽量CSVをそのまま読む
+        df = pd.read_csv(
+            SIM_LIGHT_CSV_PATH,
+            dtype={
+                "date": "string",
+                "venue": "string",
+                "race_no": "Int64",
+                "is_selected": "Int64",
+                "is_hit": "Int64",
+            },
+        )
     except Exception as e:
-        print("[WARN] failed to read merged log:", e)
+        print("[WARN] failed to read sim light csv:", e)
         return pd.DataFrame()
 
     if df.empty:
@@ -189,20 +235,7 @@ def _load_sim_log_df() -> pd.DataFrame:
 
 
 def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
-    venue_order = ["丸亀", "戸田", "児島"]
-    empty_row = {
-        "race_count": 0,
-        "buy_count": 0,
-        "hit_count": 0,
-        "hit_rate": 0.0,
-        "avg_points": 0.0,
-        "total_bets": 0.0,
-        "total_return": 0.0,
-        "total_profit": 0.0,
-        "roi": 0.0,
-    }
-
-    out = {v: dict(empty_row) for v in venue_order}
+    out = _empty_stats_map()
 
     if df.empty:
         return out
@@ -211,7 +244,7 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     if selected_df.empty:
         return out
 
-    for venue in venue_order:
+    for venue in ["丸亀", "戸田", "児島"]:
         vdf = selected_df[selected_df["venue_norm"] == venue].copy()
         if vdf.empty:
             continue
@@ -245,13 +278,9 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _build_home_stats() -> Dict[str, Dict[str, Any]]:
-    df = _load_sim_log_df()
-    return _aggregate_stats_from_df(df)
-
-
 def _build_sim_stats(start_date: str, end_date: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
-    df = _load_sim_log_df()
+    df = _load_sim_light_df()
+
     meta = {
         "start_date": start_date,
         "end_date": end_date,
@@ -277,52 +306,64 @@ def _build_sim_stats(start_date: str, end_date: str) -> Tuple[Dict[str, Dict[str
     return stats, meta
 
 
-def _debug_render_log(
-    venue: str,
-    date: str,
-    race_no: int,
-    mode: str | None,
-    entries: List[Dict[str, Any]],
-    grouped_odds: Dict[str, Any],
-    best_bets: List[Dict[str, Any]],
+def _build_race_signal(
     probabilities: Dict[str, float],
     ev_result: Dict[str, float],
-) -> None:
-    print("\n" + "=" * 80)
-    print("[DEBUG] RENDER TEMPLATE")
-    print("=" * 80)
-    print("[DEBUG] venue         :", venue)
-    print("[DEBUG] date          :", date)
-    print("[DEBUG] selected_race :", race_no)
-    print("[DEBUG] mode          :", mode)
-    print("[DEBUG] entries_len   :", len(entries))
-    print("[DEBUG] best_bets_len :", len(best_bets))
-    print("[DEBUG] probabilities :", len(probabilities))
-    print("[DEBUG] ev_result     :", len(ev_result))
-    print("[DEBUG] odds exists   :", bool(grouped_odds and grouped_odds.get("data")))
+    best_bets: List[Dict[str, Any]],
+) -> Dict[str, Any]:
+    ranked_probs = sorted(probabilities.items(), key=lambda kv: kv[1], reverse=True) if probabilities else []
+    top_prob = float(ranked_probs[0][1]) if len(ranked_probs) >= 1 else 0.0
+    second_prob = float(ranked_probs[1][1]) if len(ranked_probs) >= 2 else 0.0
+    prob_gap = top_prob - second_prob
 
-    if probabilities:
-        top_probs = sorted(probabilities.items(), key=lambda kv: kv[1], reverse=True)[:10]
-        print("[DEBUG] render probabilities top10")
-        for combo, p in top_probs:
-            print(" ", combo, round(p, 6))
+    top_ev = max([_safe_float(v, 0.0) for v in ev_result.values()], default=0.0)
 
+    best_count = len(best_bets)
+    avg_best_ev = 0.0
     if best_bets:
-        print("[DEBUG] best_bets top10")
-        for row in best_bets[:10]:
-            prob = float(row.get("prob", row.get("score", 0.0)) or 0.0)
-            odds = float(row.get("odds_raw", row.get("odds", 0.0)) or 0.0)
-            ev = float(row.get("ev_raw", row.get("ev", 0.0)) or 0.0)
-            print(
-                " ",
-                row.get("combo", ""),
-                "prob=",
-                round(prob, 6),
-                "odds=",
-                round(odds, 2),
-                "ev=",
-                round(ev, 6),
-            )
+        avg_best_ev = sum(_safe_float(x.get("ev_raw", x.get("ev", 0.0)), 0.0) for x in best_bets) / len(best_bets)
+
+    score = (
+        top_prob * 100.0 * 0.42
+        + prob_gap * 100.0 * 0.33
+        + min(top_ev, 2.0) * 10.0 * 0.17
+        + max(0.0, 7.0 - float(best_count)) * 0.18
+    )
+
+    if top_prob >= 0.11 and prob_gap >= 0.020 and top_ev >= 0.85:
+        rank = "A"
+        label = "勝負レース"
+        tone = "good"
+        comment = "上位の信頼度が高く、買い目も絞りやすいです。"
+    elif top_prob >= 0.08 and prob_gap >= 0.012 and top_ev >= 0.65:
+        rank = "B"
+        label = "狙い目"
+        tone = "good"
+        comment = "十分狙えるレースです。買い目バランスも悪くありません。"
+    elif top_prob >= 0.055 and top_ev >= 0.50:
+        rank = "C"
+        label = "様子見"
+        tone = "warn"
+        comment = "買えなくはないですが、過信はしにくいです。"
+    else:
+        rank = "D"
+        label = "見送り寄り"
+        tone = "bad"
+        comment = "確率差か期待値の押しが弱く、無理に触らない方が無難です。"
+
+    return {
+        "rank": rank,
+        "label": label,
+        "tone": tone,
+        "comment": comment,
+        "score": round(score, 2),
+        "top_prob": round(top_prob * 100.0, 2),
+        "second_prob": round(second_prob * 100.0, 2),
+        "prob_gap": round(prob_gap * 100.0, 2),
+        "top_ev": round(top_ev, 2),
+        "avg_best_ev": round(avg_best_ev, 2),
+        "best_count": best_count,
+    }
 
 
 def _get_entries_and_beforeinfo(controller: RaceController, venue: str, date: str, race_no: int):
@@ -408,6 +449,7 @@ def _render(venue: str):
         best_bets: List[Dict[str, Any]] = []
         probabilities: Dict[str, float] = {}
         ev_result: Dict[str, float] = {}
+        race_signal: Dict[str, Any] = {}
 
         if mode == "full":
             grouped_odds, bundle = _get_full_bundle(controller, venue, date, race_no)
@@ -425,6 +467,12 @@ def _render(venue: str):
             ev_result = _build_ev_map_from_prob_and_odds(probabilities, odds_map)
             best_bets = bundle.get("best_bets", []) or []
 
+            race_signal = _build_race_signal(
+                probabilities=probabilities,
+                ev_result=ev_result,
+                best_bets=best_bets,
+            )
+
             _save_prediction_log(
                 date=date,
                 venue=venue,
@@ -437,18 +485,6 @@ def _render(venue: str):
         races = _blank_races()
         races[race_no - 1]["entries"] = entries
 
-        _debug_render_log(
-            venue=venue,
-            date=date,
-            race_no=race_no,
-            mode=mode,
-            entries=entries,
-            grouped_odds=grouped_odds,
-            best_bets=best_bets,
-            probabilities=probabilities,
-            ev_result=ev_result,
-        )
-
         return render_template(
             "index.html",
             venue=venue,
@@ -459,6 +495,7 @@ def _render(venue: str):
             probabilities=probabilities,
             ev_result=ev_result,
             best_bets=best_bets,
+            race_signal=race_signal,
             beforeinfo=beforeinfo,
             before_info=beforeinfo,
             beforeinfo_data=beforeinfo,
@@ -485,6 +522,7 @@ def _render(venue: str):
             probabilities={},
             ev_result={},
             best_bets=[],
+            race_signal={},
             beforeinfo={},
             error_message=str(e),
             mode=mode,
@@ -493,7 +531,7 @@ def _render(venue: str):
 
 @app.route("/")
 def home():
-    home_stats = _build_home_stats()
+    home_stats = _load_home_stats_json()
     return render_template(
         "home.html",
         date=_today(),
@@ -503,7 +541,7 @@ def home():
 
 @app.route("/sim")
 def sim_stats():
-    df = _load_sim_log_df()
+    df = _load_sim_light_df()
 
     available_min = ""
     available_max = ""
