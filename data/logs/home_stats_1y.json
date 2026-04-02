@@ -1,0 +1,41 @@
+{
+  "source": "prediction_results_merged_sim_1y.csv",
+  "available_min_date": "20250330",
+  "available_max_date": "20260330",
+  "row_count": 816960,
+  "stats": {
+    "丸亀": {
+      "race_count": 2340,
+      "buy_count": 14553,
+      "hit_count": 795,
+      "hit_rate": 0.054627911770768915,
+      "avg_points": 6.219230769230769,
+      "total_bets": 1455300.0,
+      "total_return": 1745420.0,
+      "total_profit": 290120.0,
+      "roi": 1.1993540850683708
+    },
+    "戸田": {
+      "race_count": 2355,
+      "buy_count": 13990,
+      "hit_count": 630,
+      "hit_rate": 0.04503216583273767,
+      "avg_points": 5.940552016985138,
+      "total_bets": 1399000.0,
+      "total_return": 1791560.0,
+      "total_profit": 392560.0,
+      "roi": 1.28060042887777
+    },
+    "児島": {
+      "race_count": 2113,
+      "buy_count": 18850,
+      "hit_count": 884,
+      "hit_rate": 0.04689655172413793,
+      "avg_points": 8.920965451964031,
+      "total_bets": 1885000.0,
+      "total_return": 2375190.0,
+      "total_profit": 490190.0,
+      "roi": 1.2600477453580903
+    }
+  }
+}

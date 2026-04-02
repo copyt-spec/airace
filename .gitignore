@@ -5,7 +5,7 @@ __pycache__/
 *.py[cod]
 *$py.class
 
-# venv / env
+# 仮想環境
 .venv/
 venv/
 env/
@@ -25,47 +25,49 @@ Thumbs.db
 *.log
 
 # =========================
-# Data: raw files
+# Rawデータ（絶対除外）
 # =========================
 data/raw_k/
 data/raw_txt/
 
 # =========================
-# Data: generated datasets
+# 中間データ / 学習用データ
 # =========================
 data/datasets/*.csv
 
 # =========================
-# Data: logs / simulation outputs
+# ログ・シミュレーション
 # =========================
 data/logs/*.csv
 data/logs/*.json
 
-# もし logs 配下で残したいものが今後あればここで除外解除
-# !data/logs/keep_me.json
+# ▼ Render用に必要な軽量ファイルだけ許可
+!data/logs/home_stats_1y.json
+!data/logs/prediction_results_sim_1y_light.csv
 
 # =========================
-# Models
+# モデル
 # =========================
-# 基本は models 配下を無視
 data/models/*
 
-# 必要なモデルだけ追跡
+# ▼ 本番で使うモデルだけ許可
 !data/models/trifecta120_model_render.joblib
 !data/models/trifecta120_model_render_meta.json
 !data/models/trifecta120_model_render_labels.json
 
 !data/models/trifecta_binary_catboost_丸亀_with_racer_no.cbm
 !data/models/trifecta_binary_catboost_丸亀_with_racer_no_meta.json
+
 !data/models/trifecta_binary_catboost_戸田_with_racer_no.cbm
 !data/models/trifecta_binary_catboost_戸田_with_racer_no_meta.json
+
 !data/models/trifecta_binary_catboost_児島_with_racer_no.cbm
 !data/models/trifecta_binary_catboost_児島_with_racer_no_meta.json
 
 !data/models/venue_buy_config.optimized.json
 
 # =========================
-# Build / cache
+# キャッシュ
 # =========================
 .pytest_cache/
 .mypy_cache/
