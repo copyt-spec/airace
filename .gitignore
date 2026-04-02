@@ -1,14 +1,72 @@
-# ===== データ（超重要）=====
+# =========================
+# Python
+# =========================
+__pycache__/
+*.py[cod]
+*$py.class
+
+# venv / env
+.venv/
+venv/
+env/
+ENV/
+
+# =========================
+# OS / Editor
+# =========================
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+
+# =========================
+# Logs
+# =========================
+*.log
+
+# =========================
+# Data: raw files
+# =========================
+data/raw_k/
+data/raw_txt/
+
+# =========================
+# Data: generated datasets
+# =========================
 data/datasets/*.csv
 
-# ===== モデル（超重要）=====
+# =========================
+# Data: logs / simulation outputs
+# =========================
+data/logs/*.csv
+data/logs/*.json
+
+# もし logs 配下で残したいものが今後あればここで除外解除
+# !data/logs/keep_me.json
+
+# =========================
+# Models
+# =========================
+# 基本は models 配下を無視
 data/models/*
+
+# 必要なモデルだけ追跡
 !data/models/trifecta120_model_render.joblib
 !data/models/trifecta120_model_render_meta.json
 !data/models/trifecta120_model_render_labels.json
-!data/models/trifecta_binary_catboost_*.cbm
-!data/models/trifecta_binary_catboost_*_meta.json
 
-# Mac
-.DS_Store
+!data/models/trifecta_binary_catboost_丸亀_with_racer_no.cbm
+!data/models/trifecta_binary_catboost_丸亀_with_racer_no_meta.json
+!data/models/trifecta_binary_catboost_戸田_with_racer_no.cbm
+!data/models/trifecta_binary_catboost_戸田_with_racer_no_meta.json
+!data/models/trifecta_binary_catboost_児島_with_racer_no.cbm
+!data/models/trifecta_binary_catboost_児島_with_racer_no_meta.json
 
+!data/models/venue_buy_config.optimized.json
+
+# =========================
+# Build / cache
+# =========================
+.pytest_cache/
+.mypy_cache/
+.cache/
