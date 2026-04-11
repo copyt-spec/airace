@@ -20,6 +20,7 @@
   --warnbd: rgba(255,190,120,0.28);
   --errbg: rgba(255,120,160,0.14);
   --errbd: rgba(255,120,160,0.28);
+  --cardbg: rgba(255,255,255,0.05);
 }
 
 *{box-sizing:border-box;}
@@ -46,8 +47,6 @@ body{
   justify-content:space-between;
   align-items:center;
   margin-bottom:20px;
-  gap:12px;
-  flex-wrap:wrap;
 }
 
 .logo{
@@ -65,22 +64,6 @@ body{
 }
 .brand small{
   display:block;font-size:12px;color:var(--muted);
-}
-
-.top-links{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-}
-
-.top-links a{
-  text-decoration:none;
-  color:var(--text);
-  padding:10px 14px;
-  border-radius:14px;
-  border:1px solid var(--border);
-  background:rgba(255,255,255,0.05);
-  font-weight:700;
 }
 
 .hero{
@@ -165,6 +148,10 @@ input[type="date"]{
   background:rgba(255,255,255,0.08);
   color:var(--text);
   border:1px solid var(--border);
+}
+.btn-dark{
+  background:linear-gradient(135deg,#d9d9d9,#8cc8ff);
+  color:#071021;
 }
 
 .btn:hover{filter:brightness(1.1);}
@@ -271,120 +258,73 @@ input[type="date"]{
 }
 
 .stats-section{
-  margin-top:26px;
-}
-
-.section-title{
-  margin:0 0 14px;
-  font-size:22px;
-  font-weight:900;
-}
-
-.section-sub{
-  margin:0 0 18px;
-  color:var(--muted);
-  line-height:1.7;
-  font-size:14px;
-}
-
-.stats-grid{
+  margin-top:28px;
   display:grid;
-  grid-template-columns:repeat(3, 1fr);
-  gap:18px;
+  grid-template-columns:repeat(4,1fr);
+  gap:16px;
 }
 
 .stat-card{
   border-radius:20px;
   border:1px solid var(--border);
-  background:rgba(255,255,255,0.05);
+  background:var(--cardbg);
   box-shadow:var(--shadow);
-  padding:20px;
+  padding:18px;
 }
 
-.stat-card.good{
-  background:var(--okbg);
-  border-color:var(--okbd);
-}
-
-.stat-card.warn{
-  background:var(--warnbg);
-  border-color:var(--warnbd);
-}
-
-.stat-card.bad{
-  background:var(--errbg);
-  border-color:var(--errbd);
-}
-
-.stat-header{
-  display:flex;
-  justify-content:space-between;
-  align-items:center;
-  gap:10px;
-  margin-bottom:14px;
-}
-
-.stat-header h3{
-  margin:0;
-  font-size:20px;
+.stat-title{
+  margin:0 0 10px;
+  font-size:16px;
   font-weight:900;
 }
 
-.badge{
-  padding:6px 10px;
-  border-radius:999px;
-  font-size:12px;
-  font-weight:900;
-  border:1px solid rgba(255,255,255,0.16);
-  background:rgba(255,255,255,0.08);
-}
-
-.kv{
+.stat-grid{
   display:grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns:1fr 1fr;
   gap:10px;
-  padding:8px 0;
-  border-bottom:1px solid rgba(255,255,255,0.08);
 }
 
-.kv:last-child{
-  border-bottom:none;
+.mini{
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(0,0,0,0.18);
+  border:1px solid rgba(255,255,255,0.08);
 }
 
-.k{
+.mini .k{
+  font-size:11px;
   color:var(--muted);
-  font-size:13px;
+  margin-bottom:4px;
 }
 
-.v{
+.mini .v{
+  font-size:14px;
   font-weight:900;
-  font-variant-numeric: tabular-nums;
 }
 
-.sim-link-box{
-  margin-top:18px;
-  text-align:center;
+.home-links{
+  margin-top:24px;
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
 }
 
-.sim-link{
-  display:inline-block;
-  padding:12px 18px;
-  border-radius:16px;
-  border:1px solid rgba(255,255,255,0.12);
-  background:rgba(255,255,255,0.08);
-  color:rgba(255,255,255,0.92);
+.linkpill{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:10px 14px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.06);
+  color:var(--text);
   text-decoration:none;
-  font-weight:900;
+  font-size:13px;
+  font-weight:800;
 }
 
-@media (max-width: 920px){
-  .hero{grid-template-columns:1fr;}
-  .img-card{height:280px;}
-  .stats-grid{grid-template-columns:1fr;}
-}
-@media (max-width: 520px){
-  .hero-title{font-size:26px;}
-  .img-card{height:240px;}
+.linkpill:hover{
+  background:rgba(255,255,255,0.10);
 }
 
 .footer{
@@ -392,6 +332,19 @@ input[type="date"]{
   text-align:center;
   color:rgba(255,255,255,0.55);
   font-size:12px;
+  line-height:1.8;
+}
+
+/* モバイル */
+@media (max-width: 1100px){
+  .hero{grid-template-columns:1fr;}
+  .img-card{height:280px;}
+  .stats-section{grid-template-columns:repeat(2,1fr);}
+}
+@media (max-width: 640px){
+  .hero-title{font-size:26px;}
+  .img-card{height:240px;}
+  .stats-section{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -407,11 +360,6 @@ input[type="date"]{
         <small>機械学習 × オッズ × 直前情報</small>
       </div>
     </div>
-
-    <div class="top-links">
-      <a href="/">Home</a>
-      <a href="/sim">期間集計</a>
-    </div>
   </div>
 
   <section class="hero">
@@ -419,7 +367,7 @@ input[type="date"]{
       <h2 class="hero-title">期待値（EV%）で<br>買い目を最適化する。</h2>
       <p class="hero-sub">
         出走表を読み込み、オッズと直前情報を統合。
-        確率と回収率から3〜16点を自動選定。
+        確率と回収率から可変点数で自動選定。
       </p>
 
       <div class="controls">
@@ -431,10 +379,7 @@ input[type="date"]{
         <button class="btn btn-primary" id="goMarugame">丸亀へ</button>
         <button class="btn btn-secondary" id="goToda">戸田へ</button>
         <button class="btn btn-tertiary" id="goKojima">児島へ</button>
-      </div>
-
-      <div class="sim-link-box" style="text-align:left;">
-        <a href="/sim" class="sim-link">シミュレーション期間集計へ</a>
+        <button class="btn btn-dark" id="goSuminoe">住之江へ</button>
       </div>
 
       <div class="keep-card">
@@ -457,6 +402,10 @@ input[type="date"]{
           ・ブラウザやMac本体が完全にスリープした場合は維持できません
         </div>
       </div>
+
+      <div class="home-links">
+        <a class="linkpill" href="/sim">期間別シミュレーション</a>
+      </div>
     </div>
 
     <div class="hero-right">
@@ -471,63 +420,46 @@ input[type="date"]{
   </section>
 
   <section class="stats-section">
-    <h3 class="section-title">過去1年シミュレーション合算</h3>
-    <p class="section-sub">
-      現在保存されている1年シミュレーションCSVをもとに、会場別の成績を表示しています。
-    </p>
-
-    <div class="stats-grid">
-      {% for venue in ["丸亀", "戸田", "児島"] %}
-        {% set row = home_stats.get(venue, {}) %}
-        {% set roi = row.get("roi", 0) %}
-        {% set card_class = "bad" %}
-        {% if roi >= 1.05 %}
-          {% set card_class = "good" %}
-        {% elif roi >= 1.0 %}
-          {% set card_class = "warn" %}
-        {% endif %}
-
-        <div class="stat-card {{ card_class }}">
-          <div class="stat-header">
-            <h3>{{ venue }}</h3>
-            <div class="badge">ROI {{ "%.3f"|format(roi) }}</div>
-          </div>
-
-          <div class="kv">
+    {% for venue_name in ["丸亀", "戸田", "児島", "住之江"] %}
+      {% set s = home_stats.get(venue_name, {}) if home_stats else {} %}
+      <div class="stat-card">
+        <h3 class="stat-title">{{ venue_name }} リザルト</h3>
+        <div class="stat-grid">
+          <div class="mini">
             <div class="k">レース数</div>
-            <div class="v">{{ row.get("race_count", 0) }}</div>
+            <div class="v">{{ s.get("race_count", 0) }}</div>
           </div>
-          <div class="kv">
-            <div class="k">購入点数</div>
-            <div class="v">{{ row.get("buy_count", 0) }}</div>
+          <div class="mini">
+            <div class="k">買い目数</div>
+            <div class="v">{{ s.get("buy_count", 0) }}</div>
           </div>
-          <div class="kv">
+          <div class="mini">
             <div class="k">的中数</div>
-            <div class="v">{{ row.get("hit_count", 0) }}</div>
+            <div class="v">{{ s.get("hit_count", 0) }}</div>
           </div>
-          <div class="kv">
+          <div class="mini">
             <div class="k">的中率</div>
-            <div class="v">{{ "%.2f"|format(row.get("hit_rate", 0) * 100) }}%</div>
+            <div class="v">{{ "%.2f"|format((s.get("hit_rate", 0.0) or 0.0) * 100) }}%</div>
           </div>
-          <div class="kv">
-            <div class="k">平均買い目点数</div>
-            <div class="v">{{ "%.2f"|format(row.get("avg_points", 0)) }}</div>
+          <div class="mini">
+            <div class="k">平均点数</div>
+            <div class="v">{{ "%.2f"|format(s.get("avg_points", 0.0) or 0.0) }}</div>
           </div>
-          <div class="kv">
-            <div class="k">投資額</div>
-            <div class="v">{{ "{:,.0f}".format(row.get("total_bets", 0)) }}円</div>
+          <div class="mini">
+            <div class="k">ROI</div>
+            <div class="v">{{ "%.3f"|format(s.get("roi", 0.0) or 0.0) }}</div>
           </div>
-          <div class="kv">
-            <div class="k">回収額</div>
-            <div class="v">{{ "{:,.0f}".format(row.get("total_return", 0)) }}円</div>
+          <div class="mini">
+            <div class="k">総投資</div>
+            <div class="v">{{ "{:,.0f}".format(s.get("total_bets", 0.0) or 0.0) }}円</div>
           </div>
-          <div class="kv">
-            <div class="k">利益</div>
-            <div class="v">{{ "{:,.0f}".format(row.get("total_profit", 0)) }}円</div>
+          <div class="mini">
+            <div class="k">総回収</div>
+            <div class="v">{{ "{:,.0f}".format(s.get("total_return", 0.0) or 0.0) }}円</div>
           </div>
         </div>
-      {% endfor %}
-    </div>
+      </div>
+    {% endfor %}
   </section>
 
   <div class="footer">
@@ -559,6 +491,9 @@ document.getElementById("goToda").onclick=()=>{
 };
 document.getElementById("goKojima").onclick=()=>{
   window.location.href="/kojima?date="+toYmdCompact(input.value);
+};
+document.getElementById("goSuminoe").onclick=()=>{
+  window.location.href="/suminoe?date="+toYmdCompact(input.value);
 };
 
 let keepAliveTimer = null;

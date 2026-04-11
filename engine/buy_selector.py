@@ -19,7 +19,7 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.45,
         "ev_exp": 0.70,
         "base_bonus": 0.66,
-        "min_points": 3,
+        "min_points": 1,
         "max_points": 12,
     },
     "児島": {
@@ -32,7 +32,7 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.28,
         "ev_exp": 0.82,
         "base_bonus": 0.64,
-        "min_points": 3,
+        "min_points": 1,
         "max_points": 12,
     },
     "戸田": {
@@ -45,7 +45,7 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.24,
         "ev_exp": 0.86,
         "base_bonus": 0.63,
-        "min_points": 3,
+        "min_points": 1,
         "max_points": 12,
     },
     "default": {
@@ -58,7 +58,7 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
         "prob_exp": 1.35,
         "ev_exp": 0.75,
         "base_bonus": 0.65,
-        "min_points": 3,
+        "min_points": 1,
         "max_points": 12,
     },
 }

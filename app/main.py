@@ -25,7 +25,6 @@ app = Flask(__name__, template_folder="templates", static_folder="static")
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
 
-# 軽量ファイル
 HOME_STATS_JSON_PATH = LOG_DIR / "home_stats_1y.json"
 SIM_LIGHT_CSV_PATH = LOG_DIR / "prediction_results_sim_1y_light.csv"
 
@@ -150,11 +149,13 @@ def _normalize_venue_name(v: str) -> str:
         return "戸田"
     if "児島" in s:
         return "児島"
+    if "住之江" in s:
+        return "住之江"
     return s
 
 
 def _empty_stats_map() -> Dict[str, Dict[str, Any]]:
-    venue_order = ["丸亀", "戸田", "児島"]
+    venue_order = ["丸亀", "戸田", "児島", "住之江"]
     empty_row = {
         "race_count": 0,
         "buy_count": 0,
@@ -182,7 +183,7 @@ def _load_home_stats_json() -> Dict[str, Dict[str, Any]]:
 
     stats = data.get("stats", {})
     out = _empty_stats_map()
-    for venue in ["丸亀", "戸田", "児島"]:
+    for venue in ["丸亀", "戸田", "児島", "住之江"]:
         if venue in stats and isinstance(stats[venue], dict):
             out[venue].update(stats[venue])
     return out
@@ -193,7 +194,6 @@ def _load_sim_light_df() -> pd.DataFrame:
         return pd.DataFrame()
 
     try:
-        # 必要列だけの軽量CSVをそのまま読む
         df = pd.read_csv(
             SIM_LIGHT_CSV_PATH,
             dtype={
@@ -203,6 +203,7 @@ def _load_sim_light_df() -> pd.DataFrame:
                 "is_selected": "Int64",
                 "is_hit": "Int64",
             },
+            low_memory=False,
         )
     except Exception as e:
         print("[WARN] failed to read sim light csv:", e)
@@ -244,7 +245,7 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     if selected_df.empty:
         return out
 
-    for venue in ["丸亀", "戸田", "児島"]:
+    for venue in ["丸亀", "戸田", "児島", "住之江"]:
         vdf = selected_df[selected_df["venue_norm"] == venue].copy()
         if vdf.empty:
             continue
@@ -371,10 +372,17 @@ def _get_entries_and_beforeinfo(controller: RaceController, venue: str, date: st
         entries = controller.get_entries_toda_race(date, race_no)
         entries = controller.enrich_entries_toda(entries, date=date, race_no=race_no)
         beforeinfo = controller.get_beforeinfo_only_toda(race_no=race_no, date=date)
+
     elif venue == "児島":
         entries = controller.get_entries_kojima_race(date, race_no)
         entries = controller.enrich_entries_kojima(entries, date=date, race_no=race_no)
         beforeinfo = controller.get_beforeinfo_only_kojima(race_no=race_no, date=date)
+
+    elif venue == "住之江":
+        entries = controller.get_entries_suminoe_race(date, race_no)
+        entries = controller.enrich_entries_suminoe(entries, date=date, race_no=race_no)
+        beforeinfo = controller.get_beforeinfo_only_suminoe(race_no=race_no, date=date)
+
     else:
         entries = controller.get_entries_race(date, race_no)
         entries = controller.enrich_entries_marugame(entries, date=date, race_no=race_no)
@@ -387,9 +395,15 @@ def _get_full_bundle(controller: RaceController, venue: str, date: str, race_no:
     if venue == "戸田":
         grouped_odds = controller.get_odds_only_toda(race_no=race_no, date=date)
         bundle = controller.get_ai_prediction_bundle_toda(date, race_no, top_n=20, with_odds=True)
+
     elif venue == "児島":
         grouped_odds = controller.get_odds_only_kojima(race_no=race_no, date=date)
         bundle = controller.get_ai_prediction_bundle_kojima(date, race_no, top_n=20, with_odds=True)
+
+    elif venue == "住之江":
+        grouped_odds = controller.get_odds_only_suminoe(race_no=race_no, date=date)
+        bundle = controller.get_ai_prediction_bundle_suminoe(date, race_no, top_n=20, with_odds=True)
+
     else:
         grouped_odds = controller.get_odds_only(race_no=race_no, date=date)
         bundle = controller.get_ai_prediction_bundle_marugame(date, race_no, top_n=20, with_odds=True)
@@ -590,6 +604,11 @@ def toda():
 @app.route("/kojima")
 def kojima():
     return _render("児島")
+
+
+@app.route("/suminoe")
+def suminoe():
+    return _render("住之江")
 
 
 if __name__ == "__main__":

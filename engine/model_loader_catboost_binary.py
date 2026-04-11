@@ -20,6 +20,7 @@ class BinaryCatBoostVenueModel:
         self.models: Dict[str, Any] = {}
         self.metas: Dict[str, Dict[str, Any]] = {}
 
+        # 既存3場だけロード
         for venue in ["丸亀", "戸田", "児島"]:
             model_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_no.cbm"
             meta_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_no_meta.json"
@@ -54,7 +55,21 @@ class BinaryCatBoostVenueModel:
             return "戸田"
         if "児島" in s:
             return "児島"
+        if "住之江" in s:
+            return "住之江"
         return s
+
+    def _resolve_model_venue(self, venue_name: str) -> str:
+        """
+        実際に使うモデル会場名を返す。
+        住之江は暫定で戸田モデルを流用。
+        """
+        venue_name = self._normalize_venue_name(venue_name)
+
+        if venue_name == "住之江":
+            return "戸田"
+
+        return venue_name
 
     def _softmax(self, xs: List[float], temperature: float = 1.0) -> List[float]:
         if not xs:
@@ -80,6 +95,9 @@ class BinaryCatBoostVenueModel:
             return 0.92
         if venue_name == "児島":
             return 0.90
+        if venue_name == "住之江":
+            # 戸田流用ベース。必要なら後で微調整。
+            return 0.91
         return 0.90
 
     def _add_feature_block(self, df: pd.DataFrame) -> pd.DataFrame:
@@ -198,13 +216,14 @@ class BinaryCatBoostVenueModel:
         return x
 
     def predict_proba(self, df120: pd.DataFrame, venue_name: str) -> Dict[str, float]:
-        venue_name = self._normalize_venue_name(venue_name)
+        original_venue_name = self._normalize_venue_name(venue_name)
+        model_venue_name = self._resolve_model_venue(original_venue_name)
 
-        if venue_name not in self.models:
-            raise ValueError(f"Unsupported venue: {venue_name}")
+        if model_venue_name not in self.models:
+            raise ValueError(f"Unsupported venue: {original_venue_name} (resolved={model_venue_name})")
 
-        model = self.models[venue_name]
-        meta = self.metas[venue_name]
+        model = self.models[model_venue_name]
+        meta = self.metas[model_venue_name]
         feature_cols = list(meta.get("feature_cols", []))
 
         if "combo" not in df120.columns:
@@ -216,10 +235,21 @@ class BinaryCatBoostVenueModel:
         raw_scores = model.predict(x, prediction_type="RawFormulaVal")
         raw_scores = [self._safe_float(v, 0.0) for v in raw_scores]
 
-        temperature = self._get_temperature_by_venue(venue_name)
+        # 温度は表示会場ベースで調整
+        temperature = self._get_temperature_by_venue(original_venue_name)
         probs = self._softmax(raw_scores, temperature=temperature)
 
         combos = df120["combo"].astype(str).tolist()
         prob_map = {combo: float(p) for combo, p in zip(combos, probs)}
+
+        if self.debug:
+            top10 = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
+            print(
+                f"[DEBUG] venue={original_venue_name} "
+                f"resolved_model={model_venue_name} "
+                f"temp={temperature}"
+            )
+            for k, v in top10:
+                print("  ", k, round(v, 6))
 
         return prob_map

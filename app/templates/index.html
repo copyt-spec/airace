@@ -21,6 +21,12 @@
       --hot-line: rgba(255,184,77,0.35);
       --danger: rgba(255,120,160,0.14);
       --danger-line: rgba(255,120,160,0.22);
+      --signal-good-bg: rgba(120,255,176,0.16);
+      --signal-good-bd: rgba(120,255,176,0.34);
+      --signal-warn-bg: rgba(255,190,120,0.16);
+      --signal-warn-bd: rgba(255,190,120,0.34);
+      --signal-bad-bg: rgba(255,120,160,0.16);
+      --signal-bad-bd: rgba(255,120,160,0.34);
     }
     *{box-sizing:border-box}
     body{
@@ -200,14 +206,15 @@
       overflow:auto;
     }
     .oddrow{
-      display:grid;
-      grid-template-columns: 33px 1fr 35px 40px;
-      gap: 3px;
-      align-items:center;
-      padding: 4px 0;
-      border-bottom: 1px dashed rgba(255,255,255,0.10);
-      font-size: 10px;
-      min-width:0;
+        display:grid;
+        grid-template-columns: 33px 1fr 35px 40px;
+        gap: 3px;
+        align-items:center;
+        padding: 4px 0;
+        border-bottom: 1px dashed rgba(255,255,255,0.10);
+        font-size: 10px;
+        min-width:0;
+        border-radius: 8px;
     }
     .oddrow:last-child{border-bottom:none}
     .oddcombo{font-family: var(--mono); font-weight: 900; white-space:nowrap;}
@@ -222,6 +229,10 @@
     }
     .oddp{font-family: var(--mono); text-align:right; font-weight: 900; font-size: 11px;}
     .oddev{font-family: var(--mono); text-align:right; font-size: 10px;}
+
+    .prob-top1{background: rgba(255,184,77,0.18);}
+    .prob-top3{background: rgba(255,184,77,0.12);}
+    .prob-top10{background: rgba(70,240,210,0.12);}
 
     .warn{
       padding: 10px 12px;border-radius: 12px;
@@ -260,59 +271,60 @@
       font-weight: 900;
     }
 
-    .signalCard{
-      padding: 14px;
-      border-radius: 16px;
-      border: 1px solid rgba(255,255,255,0.10);
-      background: rgba(0,0,0,0.16);
+    .signalBox{
+      padding:12px;
+      border-radius:14px;
+      border:1px solid rgba(255,255,255,0.10);
+      background:rgba(0,0,0,0.18);
     }
-    .signalCard.good{
-      background: rgba(70,240,210,0.18);
-      border-color: rgba(70,240,210,0.30);
+    .signalBox.good{
+      background: var(--signal-good-bg);
+      border-color: var(--signal-good-bd);
     }
-    .signalCard.warn{
-      background: rgba(255,184,77,0.18);
-      border-color: rgba(255,184,77,0.30);
+    .signalBox.warn{
+      background: var(--signal-warn-bg);
+      border-color: var(--signal-warn-bd);
     }
-    .signalCard.bad{
-      background: rgba(255,120,160,0.16);
-      border-color: rgba(255,120,160,0.26);
-    }
-    .signalHead{
-      display:flex;
-      justify-content:space-between;
-      align-items:center;
-      gap:10px;
-      margin-bottom:10px;
-    }
-    .signalLabel{
-      font-size:16px;
-      font-weight:900;
+    .signalBox.bad{
+      background: var(--signal-bad-bg);
+      border-color: var(--signal-bad-bd);
     }
     .signalRank{
-      padding:6px 10px;
-      border-radius:999px;
-      font-size:12px;
+      font-size:20px;
       font-weight:900;
-      border:1px solid rgba(255,255,255,0.18);
-      background: rgba(255,255,255,0.08);
+      margin-bottom:4px;
+    }
+    .signalLabel{
+      font-size:14px;
+      font-weight:900;
+      margin-bottom:6px;
     }
     .signalComment{
       font-size:12px;
-      color: rgba(255,255,255,0.88);
-      line-height:1.7;
-      margin-bottom:10px;
+      color:rgba(255,255,255,0.88);
+      line-height:1.6;
     }
-    .signalKv{
+    .signalMetrics{
+      margin-top:8px;
       display:grid;
-      grid-template-columns: 1fr auto;
+      grid-template-columns:1fr 1fr;
       gap:8px;
-      padding:6px 0;
-      border-bottom:1px solid rgba(255,255,255,0.08);
-      font-size:12px;
     }
-    .signalKv:last-child{
-      border-bottom:none;
+    .signalMini{
+      padding:8px 9px;
+      border-radius:10px;
+      background:rgba(0,0,0,0.15);
+      border:1px solid rgba(255,255,255,0.08);
+    }
+    .signalMini .k{
+      font-size:10px;
+      color:var(--muted);
+      margin-bottom:2px;
+    }
+    .signalMini .v{
+      font-family:var(--mono);
+      font-size:12px;
+      font-weight:900;
     }
   </style>
 </head>
@@ -331,10 +343,10 @@
 
     <div class="navbtns">
       <a class="pill" href="/">Home</a>
-      <a class="pill" href="/sim">期間集計</a>
       <a class="pill" href="/marugame?date={{ date }}">丸亀</a>
       <a class="pill" href="/toda?date={{ date }}">戸田</a>
       <a class="pill" href="/kojima?date={{ date }}">児島</a>
+      <a class="pill" href="/suminoe?date={{ date }}">住之江</a>
       {% if selected_race and selected_race > 0 %}
         <a class="pill" href="?date={{ date }}">12R一覧</a>
       {% endif %}
@@ -555,6 +567,14 @@
 
           <div class="bd">
             {% if go and go.get('data') %}
+              {% set prob_sorted = probabilities | dictsort(by='value') | reverse | list if probabilities else [] %}
+              {% set top10_combos = [] %}
+              {% for k, v in prob_sorted %}
+                {% if loop.index <= 10 %}
+                  {% set _ = top10_combos.append(k) %}
+                {% endif %}
+              {% endfor %}
+
               <div class="oddsGrid">
                 {% for a in range(1,7) %}
                   <div class="oddsCol">
@@ -576,7 +596,18 @@
                               {% set prob = probabilities.get(combo) if probabilities is defined and probabilities else none %}
                               {% set evv = ev_result.get(combo) if ev_result is defined and ev_result else none %}
 
-                              <div class="oddrow">
+                              {% set row_class = "" %}
+                              {% if prob is not none %}
+                                {% if combo == prob_sorted[0][0] %}
+                                  {% set row_class = "prob-top1" %}
+                                {% elif combo in top10_combos[:3] %}
+                                  {% set row_class = "prob-top3" %}
+                                {% elif combo in top10_combos %}
+                                  {% set row_class = "prob-top10" %}
+                                {% endif %}
+                              {% endif %}
+
+                              <div class="oddrow {{ row_class }}">
                                 <div class="oddcombo">{{ b }}-{{ c }}</div>
                                 <div class="oddval">{{ odd if odd is not none else "" }}</div>
                                 <div class="oddp">
@@ -615,54 +646,37 @@
 
       <div class="sideStack">
 
-        {% if mode == "full" %}
+        {% if mode == "full" and race_signal is defined and race_signal %}
         <div class="card">
           <div class="hd">
             <div class="ttl">勝負レース判定</div>
-            <div class="tiny muted">確率差 + EV + 点数</div>
+            <div class="tiny muted">Signal</div>
           </div>
           <div class="bd">
-            {% if race_signal %}
-              <div class="signalCard {{ race_signal.get('tone', '') }}">
-                <div class="signalHead">
-                  <div class="signalLabel">{{ race_signal.get("label", "-") }}</div>
-                  <div class="signalRank">ランク {{ race_signal.get("rank", "-") }}</div>
-                </div>
+            <div class="signalBox {{ race_signal.get('tone', 'bad') }}">
+              <div class="signalRank">Rank {{ race_signal.get("rank", "-") }}</div>
+              <div class="signalLabel">{{ race_signal.get("label", "") }}</div>
+              <div class="signalComment">{{ race_signal.get("comment", "") }}</div>
 
-                <div class="signalComment">
-                  {{ race_signal.get("comment", "") }}
+              <div class="signalMetrics">
+                <div class="signalMini">
+                  <div class="k">Top確率</div>
+                  <div class="v">{{ "%.2f"|format(race_signal.get("top_prob", 0.0)) }}%</div>
                 </div>
-
-                <div class="signalKv">
-                  <div>勝負スコア</div>
-                  <div class="num">{{ race_signal.get("score", 0) }}</div>
+                <div class="signalMini">
+                  <div class="k">確率差</div>
+                  <div class="v">{{ "%.2f"|format(race_signal.get("prob_gap", 0.0)) }}%</div>
                 </div>
-                <div class="signalKv">
-                  <div>1位確率</div>
-                  <div class="num">{{ "%.2f"|format(race_signal.get("top_prob", 0)) }}%</div>
+                <div class="signalMini">
+                  <div class="k">最大EV</div>
+                  <div class="v">{{ "%.2f"|format(race_signal.get("top_ev", 0.0)) }}</div>
                 </div>
-                <div class="signalKv">
-                  <div>2位確率</div>
-                  <div class="num">{{ "%.2f"|format(race_signal.get("second_prob", 0)) }}%</div>
-                </div>
-                <div class="signalKv">
-                  <div>確率差</div>
-                  <div class="num">{{ "%.2f"|format(race_signal.get("prob_gap", 0)) }}pt</div>
-                </div>
-                <div class="signalKv">
-                  <div>最大EV</div>
-                  <div class="num">{{ "%.2f"|format(race_signal.get("top_ev", 0)) }}</div>
-                </div>
-                <div class="signalKv">
-                  <div>推奨買い目点数</div>
-                  <div class="num">{{ race_signal.get("best_count", 0) }}点</div>
+                <div class="signalMini">
+                  <div class="k">買い目数</div>
+                  <div class="v">{{ race_signal.get("best_count", 0) }}</div>
                 </div>
               </div>
-            {% else %}
-              <div class="warn">
-                勝負判定データがまだありません。
-              </div>
-            {% endif %}
+            </div>
           </div>
         </div>
         {% endif %}
@@ -677,7 +691,16 @@
             {% if best_bets and (best_bets|length > 0) %}
               <div class="ranklist">
                 {% for r in best_bets %}
-                  <div class="rankitem">
+                  {% set probv = (r.get("prob", r.get("score", 0.0)) * 100.0) %}
+                  {% set evraw = r.get("ev_raw", r.get("ev", 0.0)) %}
+                  {% set expect_yen = evraw * 100.0 %}
+                  {% set row_class = "" %}
+                  {% if evraw >= 2.0 %}
+                    {% set row_class = "ev-hot" %}
+                  {% elif evraw >= 1.2 %}
+                    {% set row_class = "ev-good" %}
+                  {% endif %}
+                  <div class="rankitem {{ row_class }}">
                     <div class="rankleft">
                       <div class="rk">{{ r.get("buy_rank", loop.index) }}</div>
                       <div style="min-width:0;">
@@ -685,11 +708,11 @@
                       </div>
                     </div>
                     <div class="rightbox">
-                      <div class="pval">期待 {{ "{:,.0f}".format((r.get("ev_raw", r.get("ev", 0.0)) or 0.0) * 100) }}円</div>
+                      <div class="pval">{{ "{:,.0f}".format(expect_yen) }}円</div>
                       <div class="oval">odds {{ "%.2f"|format(r.get("odds_raw", r.get("odds", 0.0))) }}</div>
                       <div class="evval">
-                        p {{ "%.2f"|format((r.get("prob", r.get("score", 0.0))) * 100.0) }}%
-                        / EV {{ "%.2f"|format(r.get("ev_raw", r.get("ev", 0.0))) }}
+                        p {{ "%.2f"|format(probv) }}%
+                        / EV {{ "%.2f"|format(evraw) }}
                       </div>
                     </div>
                   </div>
@@ -780,7 +803,13 @@
                 {% if loop.index <= 20 %}
                   {% set odd_rank = get_odd_from_grouped(k, godata) %}
                   {% set ev_rank = ev_result.get(k) if ev_result is defined and ev_result else none %}
-                  <div class="rankitem">
+                  {% set row_class = "" %}
+                  {% if loop.index == 1 %}
+                    {% set row_class = "ev-hot" %}
+                  {% elif loop.index <= 3 %}
+                    {% set row_class = "ev-good" %}
+                  {% endif %}
+                  <div class="rankitem {{ row_class }}">
                     <div class="rankleft">
                       <div class="rk">{{ loop.index }}</div>
                       <div style="min-width:0;">
@@ -788,11 +817,9 @@
                       </div>
                     </div>
                     <div class="rightbox">
-                      <div class="pval">{{ "%.2f"|format(v * 100.0) }}</div>
-                      <div class="oval">odds {{ odd_rank }}</div>
-                      {% if odd_rank %}
-                        <div class="evval">100円→{{ "{:,.0f}".format((v * (odd_rank|float)) * 100) }}円</div>
-                      {% elif ev_rank is not none %}
+                      <div class="pval">{{ "%.2f"|format(v * 100.0) }}%</div>
+                      <div class="oval">{{ odd_rank }}</div>
+                      {% if ev_rank is not none %}
                         <div class="evval">EV {{ "%.2f"|format(ev_rank) }}</div>
                       {% endif %}
                     </div>
@@ -836,7 +863,7 @@
                     </div>
                     <div class="rightbox">
                       <div class="pval">{{ "%.2f"|format(v) }}</div>
-                      <div class="oval">odds {{ odd_rank }}</div>
+                      <div class="oval">{{ odd_rank }}</div>
                       {% if prob_rank is not none %}
                         <div class="evval">p {{ "%.2f"|format(prob_rank * 100.0) }}%</div>
                       {% endif %}
@@ -860,17 +887,18 @@
 
   {% endif %}
 
-  <div style="
-    margin-top:20px;
-    padding:12px;
-    text-align:center;
-    font-size:12px;
-    color:rgba(255,255,255,0.6);
-  ">
-    ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。<br>
-    投資・購入は必ず自己責任でお願いします。
-  </div>
-
 </div>
+
+<div style="
+  margin-top:20px;
+  padding:12px;
+  text-align:center;
+  font-size:12px;
+  color:rgba(255,255,255,0.6);
+">
+  ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。<br>
+  投資・購入は必ず自己責任でお願いします。
+</div>
+
 </body>
 </html>

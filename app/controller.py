@@ -6,17 +6,20 @@ from typing import Any, Dict, List, Optional, Tuple
 from engine.marugame_fetcher import fetch_all_entries_once as fetch_all_marugame_entries_once
 from engine.toda_fetcher import fetch_all_toda_entries_once, fetch_toda_racelist
 from engine.kojima_fetcher import fetch_all_kojima_entries_once, fetch_kojima_racelist
+from engine.suminoe_fetcher import fetch_all_suminoe_entries_once, fetch_suminoe_racelist
+
 from engine.odds_fetcher import fetch_odds
 from engine.beforeinfo_fetcher import fetch_beforeinfo
 from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
 from engine.racelist_enricher import enrich_entries_with_racelist
 from engine.buy_selector import select_best_bets
 from engine.model_loader_catboost_binary import BinaryCatBoostVenueModel
-from engine.probability_adjuster import apply_lane_bias
+
 
 JCD_MARUGAME = 15
 JCD_TODA = 2
 JCD_KOJIMA = 16
+JCD_SUMINOE = 12
 
 
 class RaceController:
@@ -66,16 +69,6 @@ class RaceController:
             "data": data,
         }
         return data
-
-    def _venue_key(self, venue_name: str) -> str:
-        s = str(venue_name or "").strip()
-        if "丸亀" in s:
-            return "丸亀"
-        if "戸田" in s:
-            return "戸田"
-        if "児島" in s:
-            return "児島"
-        return s
 
     def _trim_old_cache(self) -> None:
         now = time.time()
@@ -137,6 +130,8 @@ class RaceController:
             return "戸田"
         if "児島" in v:
             return "児島"
+        if "住之江" in v:
+            return "住之江"
         return v
 
     def _dedupe_by_lane(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
@@ -151,52 +146,6 @@ class RaceController:
     def _is_valid_6boats(self, rows: List[Dict[str, Any]]) -> bool:
         lanes = [self._safe_int(x.get("lane", 0), 0) for x in rows]
         return len(rows) == 6 and sorted(lanes) == [1, 2, 3, 4, 5, 6]
-
-    # =========================
-    # 確率補正
-    # =========================
-    def _apply_probability_bias_by_venue(
-        self,
-        prob_map: Dict[str, float],
-        venue_name: str,
-    ) -> Dict[str, float]:
-        """
-        会場別にレーン傾向補正を入れる
-        """
-        try:
-            venue_name = self._normalize_venue_name(venue_name)
-
-            if venue_name == "丸亀":
-                return apply_lane_bias(
-                    prob_map,
-                    venue=venue_name,
-                    alpha_first=0.45,
-                    alpha_pair=0.12,
-                )
-            elif venue_name == "戸田":
-                return apply_lane_bias(
-                    prob_map,
-                    venue=venue_name,
-                    alpha_first=0.40,
-                    alpha_pair=0.12,
-                )
-            elif venue_name == "児島":
-                return apply_lane_bias(
-                    prob_map,
-                    venue=venue_name,
-                    alpha_first=0.42,
-                    alpha_pair=0.15,
-                )
-            else:
-                return apply_lane_bias(
-                    prob_map,
-                    venue=venue_name,
-                    alpha_first=0.55,
-                    alpha_pair=0.25,
-                )
-        except Exception as e:
-            print("[WARN] probability bias apply failed:", e)
-            return prob_map
 
     # =========================
     # 一覧用（場ごと全件）
@@ -231,6 +180,17 @@ class RaceController:
             return cached
 
         data = fetch_all_kojima_entries_once(date)
+        data = [dict(x) for x in data]
+        return self._cache_set(self._all_entries_cache, key, data)
+
+    def get_all_entries_suminoe(self, date: str) -> List[Dict[str, Any]]:
+        self._trim_old_cache()
+        key = ("住之江", date)
+        cached = self._cache_get(self._all_entries_cache, key, self._TTL_ALL_ENTRIES)
+        if cached is not None:
+            return cached
+
+        data = fetch_all_suminoe_entries_once(date)
         data = [dict(x) for x in data]
         return self._cache_set(self._all_entries_cache, key, data)
 
@@ -300,6 +260,30 @@ class RaceController:
 
         if not out:
             rows = fetch_kojima_racelist(race_no, date)
+            out = [dict(x) for x in rows]
+
+        out = self._dedupe_by_lane(out)
+        out.sort(key=lambda x: int(x.get("lane", 0)))
+        return self._cache_set(self._race_entries_cache, key, out)
+
+    def get_entries_suminoe_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
+        self._trim_old_cache()
+        key = ("住之江", date, int(race_no))
+        cached = self._cache_get(self._race_entries_cache, key, self._TTL_RACE_ENTRIES)
+        if cached is not None:
+            return cached
+
+        all_entries = self.get_all_entries_suminoe(date)
+        out = []
+        for row in all_entries:
+            try:
+                if int(row.get("race_no", 0)) == int(race_no):
+                    out.append(dict(row))
+            except Exception:
+                continue
+
+        if not out:
+            rows = fetch_suminoe_racelist(race_no, date)
             out = [dict(x) for x in rows]
 
         out = self._dedupe_by_lane(out)
@@ -382,6 +366,17 @@ class RaceController:
         grouped = self._group_odds(raw_odds)
         return self._cache_set(self._odds_cache, key, grouped)
 
+    def get_odds_only_suminoe(self, race_no: int, date: str) -> Dict[str, Any]:
+        self._trim_old_cache()
+        key = ("住之江", date, int(race_no))
+        cached = self._cache_get(self._odds_cache, key, self._TTL_ODDS)
+        if cached is not None:
+            return cached
+
+        raw_odds = fetch_odds(race_no, date, venue_code=JCD_SUMINOE)
+        grouped = self._group_odds(raw_odds)
+        return self._cache_set(self._odds_cache, key, grouped)
+
     # =========================
     # beforeinfo
     # =========================
@@ -413,6 +408,16 @@ class RaceController:
             return cached
 
         data = fetch_beforeinfo_venue(race_no, date, venue_code=JCD_KOJIMA)
+        return self._cache_set(self._beforeinfo_cache, key, data)
+
+    def get_beforeinfo_only_suminoe(self, race_no: int, date: str) -> Dict[str, Any]:
+        self._trim_old_cache()
+        key = ("住之江", date, int(race_no))
+        cached = self._cache_get(self._beforeinfo_cache, key, self._TTL_BEFOREINFO)
+        if cached is not None:
+            return cached
+
+        data = fetch_beforeinfo_venue(race_no, date, venue_code=JCD_SUMINOE)
         return self._cache_set(self._beforeinfo_cache, key, data)
 
     # =========================
@@ -479,6 +484,28 @@ class RaceController:
             date=date,
             race_no=race_no,
             venue_code=JCD_KOJIMA,
+        )
+        data = self._dedupe_by_lane([dict(x) for x in data])
+        data.sort(key=lambda x: int(x.get("lane", 0)))
+        return self._cache_set(self._enriched_entries_cache, key, data)
+
+    def enrich_entries_suminoe(
+        self,
+        entries: List[Dict[str, Any]],
+        date: str,
+        race_no: int,
+    ) -> List[Dict[str, Any]]:
+        self._trim_old_cache()
+        key = ("住之江", date, int(race_no))
+        cached = self._cache_get(self._enriched_entries_cache, key, self._TTL_ENRICHED)
+        if cached is not None:
+            return cached
+
+        data = enrich_entries_with_racelist(
+            entries,
+            date=date,
+            race_no=race_no,
+            venue_code=JCD_SUMINOE,
         )
         data = self._dedupe_by_lane([dict(x) for x in data])
         data.sort(key=lambda x: int(x.get("lane", 0)))
@@ -656,7 +683,8 @@ class RaceController:
                         "venue_code": (
                             JCD_MARUGAME if venue_name == "丸亀"
                             else JCD_TODA if venue_name == "戸田"
-                            else JCD_KOJIMA
+                            else JCD_KOJIMA if venue_name == "児島"
+                            else JCD_SUMINOE
                         ),
                         "race_no": race_no,
                         "combo": combo,
@@ -790,28 +818,11 @@ class RaceController:
 
         try:
             prob_map = self.binary_model.predict_proba(df120, venue_name)
-        except Exception as e:
-            print("[DEBUG] predict_proba failed:", e)
+        except Exception:
             prob_map = {}
 
         if not prob_map:
             return out
-
-        ranked = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
-        print(f"[DEBUG][{venue_name}] controller prob_map top10 BEFORE bias")
-        for combo, p in ranked:
-            print(" ", combo, round(p, 6))
-
-        # いまは原因切り分けのため bias はオフ推奨
-        # prob_map = self._apply_probability_bias_by_venue(
-        #     prob_map=prob_map,
-        #     venue_name=venue_name,
-        # )
-
-        ranked2 = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
-        print(f"[DEBUG][{venue_name}] controller prob_map top10 AFTER bias")
-        for combo, p in ranked2:
-            print(" ", combo, round(p, 6))
 
         best_bets = self._select_best_bets(
             prob_map=prob_map,
@@ -819,19 +830,6 @@ class RaceController:
             top_n=top_n,
             venue_name=venue_name,
         )
-
-        print(f"[DEBUG][{venue_name}] best_bets top10")
-        for row in best_bets[:10]:
-            print(
-                " ",
-                row.get("combo", ""),
-                "prob=",
-                round(float(row.get("prob", row.get("score", 0.0))), 6),
-                "odds=",
-                round(float(row.get("odds", 0.0)), 2),
-                "ev=",
-                round(float(row.get("ev", 0.0)), 6),
-            )
 
         out["best_bets"] = best_bets
         out["prob_map"] = prob_map
@@ -870,6 +868,16 @@ class RaceController:
         with_odds: bool = True,
     ) -> List[Dict[str, Any]]:
         bundle = self.get_ai_prediction_bundle_kojima(date, race_no, top_n=top_n, with_odds=with_odds)
+        return bundle.get("best_bets", [])
+
+    def get_ai_predictions_suminoe(
+        self,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+    ) -> List[Dict[str, Any]]:
+        bundle = self.get_ai_prediction_bundle_suminoe(date, race_no, top_n=top_n, with_odds=with_odds)
         return bundle.get("best_bets", [])
 
     # =========================
@@ -973,6 +981,41 @@ class RaceController:
             race_no=race_no,
             venue_name="児島",
             venue_code=JCD_KOJIMA,
+            base_entries=base_entries,
+            beforeinfo=beforeinfo,
+            enriched_entries=enriched_entries,
+            top_n=top_n,
+            with_odds=with_odds,
+        )
+
+    def get_ai_prediction_bundle_suminoe(
+        self,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+    ) -> Dict[str, Any]:
+        try:
+            base_entries = self.get_entries_suminoe_race(date, race_no)
+        except Exception:
+            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
+
+        try:
+            enriched_entries = self.enrich_entries_suminoe(base_entries, date, race_no)
+            enriched_entries = self._dedupe_by_lane(enriched_entries)
+        except Exception:
+            enriched_entries = None
+
+        try:
+            beforeinfo = self.get_beforeinfo_only_suminoe(race_no, date)
+        except Exception:
+            beforeinfo = {}
+
+        return self._predict_bundle(
+            date=date,
+            race_no=race_no,
+            venue_name="住之江",
+            venue_code=JCD_SUMINOE,
             base_entries=base_entries,
             beforeinfo=beforeinfo,
             enriched_entries=enriched_entries,
