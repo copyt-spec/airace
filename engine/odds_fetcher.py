@@ -35,6 +35,15 @@ FIXED_ORDER = """1-2-3 2-1-3 3-1-2 4-1-2 5-1-2 6-1-2
 1-6-4 2-6-4 3-6-4 4-6-3 5-6-3 6-5-3
 1-6-5 2-6-5 3-6-5 4-6-5 5-6-4 6-5-4""".split()
 
+# 3連複(順不同・20通り)。boatrace.jp の odds3f ページは
+# 1着候補昇順→2着候補昇順→3着候補昇順(=itertools.combinationsの順)で
+# グリッド表示されるのが通例。ただし実際のHTML構造は必ず一度、
+# 本番環境(ネットワーク制限のないところ)で fetch_odds_sanrenpuku() の
+# 結果を目視確認してから使うこと(このサンドボックスは外部サイトへの
+# 接続がブロックされておりライブ検証できていない)。
+FIXED_ORDER_3PUKU = """1-2-3 1-2-4 1-2-5 1-2-6 1-3-4 1-3-5 1-3-6 1-4-5 1-4-6 1-5-6
+2-3-4 2-3-5 2-3-6 2-4-5 2-4-6 2-5-6 3-4-5 3-4-6 3-5-6 4-5-6""".split()
+
 
 # =========================
 # shared session / cache
@@ -52,8 +61,8 @@ _RE_TAGS = re.compile(r"<[^>]+>")
 _RE_SPACE = re.compile(r"\s+")
 
 
-def _cache_key(race_no: int, date: str, venue_code: int) -> str:
-    return f"odds3t_{venue_code}_{date}_{race_no}"
+def _cache_key(race_no: int, date: str, venue_code: int, bet_type: str = "odds3t") -> str:
+    return f"{bet_type}_{venue_code}_{date}_{race_no}"
 
 
 def _get_cache(key: str) -> Optional[Dict[str, str]]:
@@ -164,26 +173,25 @@ def _extract_odds_bs4(html: str) -> list[str]:
     return [cell.get_text(strip=True) for cell in cells]
 
 
-def fetch_odds(race_no, date, venue_code: int = 15) -> Dict[str, str]:
-    """
-    三連単120通りオッズを取得
-    return:
-      {
-        "1-2-3": "5.4",
-        ...
-      }
-    """
+def _fetch_odds_generic(
+    race_no,
+    date,
+    venue_code: int,
+    endpoint: str,
+    fixed_order: list[str],
+    bet_type: str,
+) -> Dict[str, str]:
     race_no_i = int(race_no)
     date_s = str(date)
     venue_code_i = int(venue_code)
 
-    key = _cache_key(race_no_i, date_s, venue_code_i)
+    key = _cache_key(race_no_i, date_s, venue_code_i, bet_type=bet_type)
     cached = _get_cache(key)
     if cached is not None:
         return cached
 
     jcd = _jcd2(venue_code_i)
-    url = f"https://www.boatrace.jp/owpc/pc/race/odds3t?jcd={jcd}&hd={date_s}&rno={race_no_i}"
+    url = f"https://www.boatrace.jp/owpc/pc/race/{endpoint}?jcd={jcd}&hd={date_s}&rno={race_no_i}"
 
     session = _get_session()
     response = session.get(url, timeout=(4, 10))
@@ -197,19 +205,59 @@ def fetch_odds(race_no, date, venue_code: int = 15) -> Dict[str, str]:
     odds_values = _extract_odds_fast(html)
 
     # 足りない時だけ bs4 fallback
-    if len(odds_values) < len(FIXED_ORDER):
+    if len(odds_values) < len(fixed_order):
         odds_values = _extract_odds_bs4(html)
 
     odds_dict: Dict[str, str] = {}
 
-    # 既存仕様維持：FIXED_ORDER と zip で対応
-    for combo, odd in zip(FIXED_ORDER, odds_values):
+    # 既存仕様維持：fixed_order と zip で対応
+    for combo, odd in zip(fixed_order, odds_values):
         odds_dict[combo] = odd
 
     # 足りない時もキーは揃える
-    if len(odds_dict) < len(FIXED_ORDER):
-        for combo in FIXED_ORDER:
+    if len(odds_dict) < len(fixed_order):
+        for combo in fixed_order:
             odds_dict.setdefault(combo, "")
 
     _set_cache(key, odds_dict)
     return odds_dict
+
+
+def fetch_odds(race_no, date, venue_code: int = 15) -> Dict[str, str]:
+    """
+    三連単120通りオッズを取得
+    return:
+      {
+        "1-2-3": "5.4",
+        ...
+      }
+    """
+    return _fetch_odds_generic(
+        race_no, date, venue_code,
+        endpoint="odds3t",
+        fixed_order=FIXED_ORDER,
+        bet_type="odds3t",
+    )
+
+
+def fetch_odds_sanrenpuku(race_no, date, venue_code: int = 15) -> Dict[str, str]:
+    """
+    三連複20通りオッズを取得(概ね odds3f エンドポイント)。
+    return:
+      {
+        "1-2-3": "2.5",
+        ...
+      }
+
+    NOTE: このサンドボックスは外部サイトへの接続がブロックされているため、
+    実際のHTML構造(class名・並び順)は未検証。本番環境で最初に呼び出した際は
+    必ず結果件数(20件か)と値の妥当性を確認すること。ズレていた場合は
+    FIXED_ORDER_3PUKU の並び順、またはCSSセレクタ(oddsPoint)を
+    実際のページに合わせて調整する。
+    """
+    return _fetch_odds_generic(
+        race_no, date, venue_code,
+        endpoint="odds3f",
+        fixed_order=FIXED_ORDER_3PUKU,
+        bet_type="odds3f",
+    )

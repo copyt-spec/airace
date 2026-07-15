@@ -1,0 +1,513 @@
+from __future__ import annotations
+
+"""
+scripts/train_binary_catboost_per_venue.py に、選手の実績特徴量
+(通算勝率・複勝率・平均ST・出走コース別複勝率/平均ST。すべてレース時点より前の
+実績のみを使ったリーク無し集計)を追加したバージョン。
+
+事前準備:
+  1) python scripts/build_racer_history.py            (data/raw_txt全件から選手×レースの履歴を作成)
+  2) python scripts/build_racer_point_in_time_stats.py (リーク無しの時系列成績を計算)
+  3) このスクリプトを実行
+
+このサンドボックス環境にはcatboostが無いため実行検証ができていない。
+data/datasets/racer_race_history.csv と racer_point_in_time_stats.csv は
+既に用意してあるので、catboostが使えるユーザーの手元環境でこのスクリプトを
+実行し、venue指定 or --all で学習・比較してほしい。
+
+保存先は "_with_racer_stats" サフィックス付きにしてあり、既存の
+"_with_racer_no" モデルは上書きしない。バックテストで比較してから
+本番差し替えを判断すること。
+"""
+
+import argparse
+import json
+from pathlib import Path
+from typing import Any, Dict, List, Tuple
+
+import numpy as np
+import pandas as pd
+from catboost import CatBoostClassifier
+from sklearn.metrics import log_loss, roc_auc_score
+from sklearn.model_selection import train_test_split
+
+from engine.venue_registry import VENUE_ORDER, normalize_venue_name
+
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
+RACER_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "racer_point_in_time_stats.csv"
+MODEL_DIR = PROJECT_ROOT / "data" / "models"
+
+
+SPLIT_BY_VENUE_DIR = PROJECT_ROOT / "data" / "datasets" / "trifecta_train_by_venue"
+
+
+def _load_dataset_for_venue(src: Path, venue: str, chunksize: int = 200_000) -> pd.DataFrame:
+    venue = normalize_venue_name(venue)
+
+    # scripts/split_trifecta_train_by_venue.py で事前分割済みならそれを使う(高速)
+    pre_split_path = SPLIT_BY_VENUE_DIR / f"{venue}.csv"
+    if pre_split_path.exists():
+        print(f"Loading pre-split dataset for venue: {venue} <- {pre_split_path}")
+        df = pd.read_csv(pre_split_path, low_memory=False)
+        df["venue"] = df["venue"].astype(str).map(normalize_venue_name)
+        df = df[df["venue"] == venue].copy()
+        if df.empty:
+            raise RuntimeError(f"no data for venue: {venue}")
+        return df
+
+    if not src.exists():
+        raise FileNotFoundError(src)
+
+    print(f"Loading dataset for venue: {venue}")
+    print(f"source: {src}")
+    print("(ヒント: scripts/split_trifecta_train_by_venue.py を先に実行すると--allが大幅に速くなります)")
+
+    chunks: List[pd.DataFrame] = []
+    total_rows = 0
+    matched_rows = 0
+
+    for chunk in pd.read_csv(src, low_memory=False, chunksize=chunksize):
+        total_rows += len(chunk)
+
+        if "venue" not in chunk.columns:
+            raise ValueError("dataset must contain venue column")
+
+        chunk["venue"] = chunk["venue"].astype(str).map(normalize_venue_name)
+        hit = chunk[chunk["venue"] == venue].copy()
+
+        if not hit.empty:
+            matched_rows += len(hit)
+            chunks.append(hit)
+
+        print(f"scanned={total_rows:,} matched={matched_rows:,}")
+
+    if not chunks:
+        raise RuntimeError(f"no data for venue: {venue}")
+
+    df = pd.concat(chunks, ignore_index=True)
+    if df.empty:
+        raise RuntimeError(f"no data for venue: {venue}")
+
+    return df
+
+
+def _load_racer_stats() -> pd.DataFrame:
+    if not RACER_STATS_PATH.exists():
+        raise FileNotFoundError(
+            f"{RACER_STATS_PATH} が見つかりません。先に "
+            "scripts/build_racer_history.py と scripts/build_racer_point_in_time_stats.py を実行してください。"
+        )
+    stats = pd.read_csv(RACER_STATS_PATH, low_memory=False)
+    stats["date"] = stats["date"].astype(str).str.zfill(8)
+    stats["racer_no"] = pd.to_numeric(stats["racer_no"], errors="coerce").fillna(0).astype(int)
+    return stats
+
+
+def _add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
+    out = df.copy()
+
+    if "combo" in out.columns:
+        parts = out["combo"].astype(str).str.split("-", expand=True)
+        if parts.shape[1] >= 3:
+            out["combo_first_lane"] = pd.to_numeric(parts[0], errors="coerce").fillna(0).astype("int16")
+            out["combo_second_lane"] = pd.to_numeric(parts[1], errors="coerce").fillna(0).astype("int16")
+            out["combo_third_lane"] = pd.to_numeric(parts[2], errors="coerce").fillna(0).astype("int16")
+        else:
+            out["combo_first_lane"] = 0
+            out["combo_second_lane"] = 0
+            out["combo_third_lane"] = 0
+    else:
+        out["combo_first_lane"] = 0
+        out["combo_second_lane"] = 0
+        out["combo_third_lane"] = 0
+
+    wind_map = {
+        "無風": 0,
+        "北": 1, "北東": 2, "東": 3, "南東": 4,
+        "南": 5, "南西": 6, "西": 7, "北西": 8,
+    }
+    if "wind_dir" in out.columns:
+        out["wind_dir_code"] = out["wind_dir"].astype(str).map(wind_map).fillna(0).astype("int16")
+    else:
+        out["wind_dir_code"] = 0
+
+    weather_map = {
+        "晴": 1, "晴れ": 1,
+        "曇": 2, "曇り": 2,
+        "雨": 3,
+        "雪": 4,
+    }
+    if "weather" in out.columns:
+        out["weather_code"] = out["weather"].astype(str).map(weather_map).fillna(0).astype("int16")
+    else:
+        out["weather_code"] = 0
+
+    for lane in range(1, 7):
+        st_col = f"lane{lane}_st"
+        ex_col = f"lane{lane}_exhibit"
+        course_col = f"lane{lane}_course"
+        motor_col = f"lane{lane}_motor"
+        boat_col = f"lane{lane}_boat"
+        racer_col = f"lane{lane}_racer_no"
+
+        for c in [st_col, ex_col, course_col, motor_col, boat_col, racer_col]:
+            if c not in out.columns:
+                out[c] = 0
+
+        out[st_col] = pd.to_numeric(out[st_col], errors="coerce").fillna(0).astype("float32")
+        out[ex_col] = pd.to_numeric(out[ex_col], errors="coerce").fillna(0).astype("float32")
+        out[course_col] = pd.to_numeric(out[course_col], errors="coerce").fillna(0).astype("int16")
+        out[motor_col] = pd.to_numeric(out[motor_col], errors="coerce").fillna(0).astype("int16")
+        out[boat_col] = pd.to_numeric(out[boat_col], errors="coerce").fillna(0).astype("int16")
+        out[racer_col] = pd.to_numeric(out[racer_col], errors="coerce").fillna(0).astype("int32")
+
+        out[f"lane{lane}_st_inv"] = (0.3 - out[st_col]).clip(lower=-1, upper=1).astype("float32")
+        out[f"lane{lane}_exhibit_inv"] = (7.5 - out[ex_col]).clip(lower=-2, upper=2).astype("float32")
+        out[f"lane{lane}_course_diff"] = (out[course_col] - lane).astype("int16")
+
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        out[f"{pos}_st"] = 0.0
+        out[f"{pos}_exhibit"] = 0.0
+        out[f"{pos}_course"] = 0
+        out[f"{pos}_motor"] = 0
+        out[f"{pos}_boat"] = 0
+        out[f"{pos}_racer_no"] = 0
+
+        for lane in range(1, 7):
+            mask = out[pos_name] == lane
+            out.loc[mask, f"{pos}_st"] = out.loc[mask, f"lane{lane}_st"]
+            out.loc[mask, f"{pos}_exhibit"] = out.loc[mask, f"lane{lane}_exhibit"]
+            out.loc[mask, f"{pos}_course"] = out.loc[mask, f"lane{lane}_course"]
+            out.loc[mask, f"{pos}_motor"] = out.loc[mask, f"lane{lane}_motor"]
+            out.loc[mask, f"{pos}_boat"] = out.loc[mask, f"lane{lane}_boat"]
+            out.loc[mask, f"{pos}_racer_no"] = out.loc[mask, f"lane{lane}_racer_no"]
+
+    out["first_second_st_diff"] = (out["first_st"] - out["second_st"]).astype("float32")
+    out["first_third_st_diff"] = (out["first_st"] - out["third_st"]).astype("float32")
+    out["first_second_exhibit_diff"] = (out["first_exhibit"] - out["second_exhibit"]).astype("float32")
+    out["first_third_exhibit_diff"] = (out["first_exhibit"] - out["third_exhibit"]).astype("float32")
+
+    if "wind_speed_mps" not in out.columns:
+        out["wind_speed_mps"] = 0.0
+    if "wave_cm" not in out.columns:
+        out["wave_cm"] = 0.0
+
+    out["wind_speed_mps"] = pd.to_numeric(out["wind_speed_mps"], errors="coerce").fillna(0).astype("float32")
+    out["wave_cm"] = pd.to_numeric(out["wave_cm"], errors="coerce").fillna(0).astype("float32")
+
+    return out
+
+
+def _add_racer_stats_block(df: pd.DataFrame, racer_stats: pd.DataFrame) -> pd.DataFrame:
+    """
+    lane{n}_racer_no + date をキーに、リーク無しの時系列選手成績を結合する。
+    course別の place_rate/avg_st は、そのレースでその艇が実際に取った
+    lane{n}_course に対応する列を選んで割り当てる。
+    """
+    out = df.copy()
+    out["date"] = out["date"].astype(str).str.zfill(8)
+
+    stats_indexed = racer_stats.set_index(["racer_no", "date"])
+
+    for lane in range(1, 7):
+        racer_col = f"lane{lane}_racer_no"
+        course_col = f"lane{lane}_course"
+
+        key_df = out[[racer_col, "date"]].copy()
+        key_df.columns = ["racer_no", "date"]
+        key_df["racer_no"] = pd.to_numeric(key_df["racer_no"], errors="coerce").fillna(0).astype(int)
+
+        joined = key_df.merge(
+            racer_stats,
+            on=["racer_no", "date"],
+            how="left",
+        )
+
+        out[f"lane{lane}_races_prior"] = joined["races_prior"].to_numpy()
+        out[f"lane{lane}_win_rate_prior"] = joined["win_rate_prior"].to_numpy()
+        out[f"lane{lane}_place_rate_prior"] = joined["place_rate_prior"].to_numpy()
+        out[f"lane{lane}_avg_st_prior"] = joined["avg_st_prior"].to_numpy()
+
+        # そのレースで実際に走ったコース(1-6)別の複勝率・平均STを選ぶ
+        course_vals = pd.to_numeric(out[course_col], errors="coerce").fillna(0).astype(int)
+        place_rate_by_course = np.full(len(out), np.nan)
+        avg_st_by_course = np.full(len(out), np.nan)
+
+        for c in range(1, 7):
+            mask = (course_vals == c).to_numpy()
+            if not mask.any():
+                continue
+            place_rate_by_course[mask] = joined[f"course{c}_place_rate_prior"].to_numpy()[mask]
+            avg_st_by_course[mask] = joined[f"course{c}_avg_st_prior"].to_numpy()[mask]
+
+        out[f"lane{lane}_course_place_rate_prior"] = place_rate_by_course
+        out[f"lane{lane}_course_avg_st_prior"] = avg_st_by_course
+
+    # combo(1着/2着/3着候補)側にも同じ値を割り当てる
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        for feat in [
+            "races_prior", "win_rate_prior", "place_rate_prior",
+            "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
+        ]:
+            out[f"{pos}_{feat}"] = np.nan
+            for lane in range(1, 7):
+                mask = out[pos_name] == lane
+                out.loc[mask, f"{pos}_{feat}"] = out.loc[mask, f"lane{lane}_{feat}"]
+
+    return out
+
+
+RACER_STATS_FEATURE_SUFFIXES = [
+    "races_prior", "win_rate_prior", "place_rate_prior",
+    "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
+]
+
+
+def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool) -> List[str]:
+    candidate_cols = [
+        "combo_first_lane", "combo_second_lane", "combo_third_lane",
+        "wind_dir_code", "weather_code", "wind_speed_mps", "wave_cm",
+
+        "lane1_boat", "lane1_course", "lane1_exhibit", "lane1_motor", "lane1_racer_no", "lane1_st",
+        "lane2_boat", "lane2_course", "lane2_exhibit", "lane2_motor", "lane2_racer_no", "lane2_st",
+        "lane3_boat", "lane3_course", "lane3_exhibit", "lane3_motor", "lane3_racer_no", "lane3_st",
+        "lane4_boat", "lane4_course", "lane4_exhibit", "lane4_motor", "lane4_racer_no", "lane4_st",
+        "lane5_boat", "lane5_course", "lane5_exhibit", "lane5_motor", "lane5_racer_no", "lane5_st",
+        "lane6_boat", "lane6_course", "lane6_exhibit", "lane6_motor", "lane6_racer_no", "lane6_st",
+
+        "lane1_st_inv", "lane2_st_inv", "lane3_st_inv", "lane4_st_inv", "lane5_st_inv", "lane6_st_inv",
+        "lane1_exhibit_inv", "lane2_exhibit_inv", "lane3_exhibit_inv", "lane4_exhibit_inv", "lane5_exhibit_inv", "lane6_exhibit_inv",
+        "lane1_course_diff", "lane2_course_diff", "lane3_course_diff", "lane4_course_diff", "lane5_course_diff", "lane6_course_diff",
+
+        "first_st", "second_st", "third_st",
+        "first_exhibit", "second_exhibit", "third_exhibit",
+        "first_course", "second_course", "third_course",
+        "first_motor", "second_motor", "third_motor",
+        "first_boat", "second_boat", "third_boat",
+        "first_racer_no", "second_racer_no", "third_racer_no",
+
+        "first_second_st_diff", "first_third_st_diff",
+        "first_second_exhibit_diff", "first_third_exhibit_diff",
+    ]
+
+    if with_racer_stats:
+        for lane in range(1, 7):
+            for suf in RACER_STATS_FEATURE_SUFFIXES:
+                candidate_cols.append(f"lane{lane}_{suf}")
+        for pos in ["first", "second", "third"]:
+            for suf in RACER_STATS_FEATURE_SUFFIXES:
+                candidate_cols.append(f"{pos}_{suf}")
+
+    return [c for c in candidate_cols if c in df.columns]
+
+
+def _prepare_xy(df: pd.DataFrame, with_racer_stats: bool) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+    if "y" not in df.columns:
+        raise ValueError("dataset must contain y column")
+
+    work = _add_feature_block(df.copy())
+    feature_cols = _get_feature_cols(work, with_racer_stats)
+    if not feature_cols:
+        raise RuntimeError("no feature columns found")
+
+    x = work[feature_cols].copy()
+    for col in x.columns:
+        x[col] = pd.to_numeric(x[col], errors="coerce").fillna(0)
+
+    y = pd.to_numeric(work["y"], errors="coerce").fillna(0).astype(int)
+    return x, y, feature_cols
+
+
+def _split_by_date(df: pd.DataFrame, test_size: float) -> Tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    行単位のランダム分割(stratify付きtrain_test_split)は、同じレースの
+    組み合わせ行が学習/検証にまたがって混ざるため、実質的にどのレースも
+    「答えを見たことがある」状態になりリークする。日付でスパッと分割し、
+    検証期間のレースを完全に未知にする。
+    """
+    dates = sorted(df["date"].astype(str).unique())
+    n = len(dates)
+    if n < 5:
+        raise RuntimeError("date count too small for split")
+
+    cutoff_idx = max(1, int(n * (1.0 - test_size)))
+    train_dates = set(dates[:cutoff_idx])
+    valid_dates = set(dates[cutoff_idx:])
+
+    train_df = df[df["date"].astype(str).isin(train_dates)].copy()
+    valid_df = df[df["date"].astype(str).isin(valid_dates)].copy()
+
+    print(f"split by date: train={min(train_dates)}..{max(train_dates)} ({len(train_dates)}日) "
+          f"valid={min(valid_dates)}..{max(valid_dates)} ({len(valid_dates)}日)")
+
+    return train_df, valid_df
+
+
+def _build_save_paths(model_dir: Path, venue: str) -> Tuple[Path, Path]:
+    model_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats.cbm"
+    meta_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats_meta.json"
+    return model_path, meta_path
+
+
+def _train_one_venue(
+    src: Path,
+    venue: str,
+    racer_stats: pd.DataFrame,
+    test_size: float,
+    random_state: int,
+    iterations: int,
+    depth: int,
+    learning_rate: float,
+    verbose_eval: int,
+    skip_baseline_rerun: bool = False,
+) -> None:
+    venue = normalize_venue_name(venue)
+    print("\n" + "=" * 80)
+    print("TRAIN VENUE (with racer stats):", venue)
+    print("=" * 80)
+
+    df = _load_dataset_for_venue(src, venue)
+    print("rows           :", len(df))
+    if "date" in df.columns:
+        print("min date       :", str(df["date"].astype(str).min()))
+        print("max date       :", str(df["date"].astype(str).max()))
+
+    df = _add_racer_stats_block(df, racer_stats)
+    df["date"] = df["date"].astype(str)
+
+    train_raw, valid_raw = _split_by_date(df, test_size)
+
+    variants = [(True, "with_racer_stats")]
+    if not skip_baseline_rerun:
+        variants.insert(0, (False, "baseline_rerun"))
+
+    baseline_metrics = None
+
+    for with_racer_stats, suffix in variants:
+        x_train, y_train, feature_cols = _prepare_xy(train_raw, with_racer_stats)
+        x_valid, y_valid, _ = _prepare_xy(valid_raw, with_racer_stats)
+
+        pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
+        neg_count = int((y_train == 0).sum() + (y_valid == 0).sum())
+        if pos_count == 0 or neg_count == 0:
+            raise RuntimeError(f"class balance invalid for venue: {venue}")
+
+        pos_train = int((y_train == 1).sum())
+        neg_train = int((y_train == 0).sum())
+        scale_pos_weight = float(neg_train / max(pos_train, 1))
+
+        print(f"\n--- variant: {suffix} (feature_count={len(feature_cols)}) ---")
+
+        model = CatBoostClassifier(
+            loss_function="Logloss",
+            eval_metric="Logloss",
+            iterations=iterations,
+            depth=depth,
+            learning_rate=learning_rate,
+            random_seed=random_state,
+            verbose=verbose_eval,
+            scale_pos_weight=scale_pos_weight,
+            allow_writing_files=False,
+        )
+
+        model.fit(x_train, y_train, eval_set=(x_valid, y_valid), use_best_model=True)
+
+        valid_pred = model.predict_proba(x_valid)[:, 1]
+        valid_logloss = float(log_loss(y_valid, valid_pred))
+        try:
+            valid_auc = float(roc_auc_score(y_valid, valid_pred))
+        except Exception:
+            valid_auc = 0.0
+
+        print(f"[{suffix}] valid logloss: {valid_logloss:.6f}  valid auc: {valid_auc:.6f}")
+
+        if suffix == "baseline_rerun":
+            baseline_metrics = {"valid_logloss": valid_logloss, "valid_auc": valid_auc}
+
+        if suffix == "with_racer_stats":
+            MODEL_DIR.mkdir(parents=True, exist_ok=True)
+            model_path, meta_path = _build_save_paths(MODEL_DIR, venue)
+            model.save_model(str(model_path))
+
+            meta = {
+                "venue": venue,
+                "model_type": "catboost_binary",
+                "with_racer_stats": True,
+                "dataset_path": str(src),
+                "rows_total": int(len(df)),
+                "rows_train": int(len(x_train)),
+                "rows_valid": int(len(x_valid)),
+                "positive_total": pos_count,
+                "negative_total": neg_count,
+                "feature_cols": feature_cols,
+                "params": {
+                    "iterations": iterations, "depth": depth, "learning_rate": learning_rate,
+                    "random_state": random_state, "test_size": test_size,
+                    "scale_pos_weight": scale_pos_weight,
+                },
+                "metrics": {"valid_logloss": valid_logloss, "valid_auc": valid_auc},
+                "baseline_rerun_metrics_same_split": baseline_metrics,
+            }
+            with open(meta_path, "w", encoding="utf-8") as f:
+                json.dump(meta, f, ensure_ascii=False, indent=2)
+
+            print("saved model:", model_path)
+            print("saved meta :", meta_path)
+
+
+def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--src", default=str(DATASET_PATH))
+    parser.add_argument("--venue", default="", help="会場名(例: 戸田)")
+    parser.add_argument("--all", action="store_true", help="全会場学習")
+    parser.add_argument("--test_size", type=float, default=0.20)
+    parser.add_argument("--random_state", type=int, default=42)
+    parser.add_argument("--iterations", type=int, default=600)
+    parser.add_argument("--depth", type=int, default=8)
+    parser.add_argument("--learning_rate", type=float, default=0.05)
+    parser.add_argument("--verbose_eval", type=int, default=50)
+    parser.add_argument(
+        "--skip_baseline_rerun", action="store_true",
+        help="比較用のbaseline再学習をスキップし、with_racer_stats版だけ学習する(--all時は時間半減のため推奨)",
+    )
+    args = parser.parse_args()
+
+    src = Path(args.src)
+    racer_stats = _load_racer_stats()
+    print("racer_stats rows:", len(racer_stats))
+
+    if args.all:
+        venues = list(VENUE_ORDER)
+        skip_baseline_rerun = True if not args.skip_baseline_rerun else args.skip_baseline_rerun
+        # --all はデフォルトでbaseline再学習をスキップ(時間短縮)。
+        # 明示的に比較したい場合は個別に --venue で実行してください。
+    elif args.venue:
+        venues = [args.venue]
+        skip_baseline_rerun = args.skip_baseline_rerun
+    else:
+        raise SystemExit("--venue か --all を指定してください")
+
+    for v in venues:
+        try:
+            _train_one_venue(
+                src=src, venue=v, racer_stats=racer_stats,
+                test_size=args.test_size, random_state=args.random_state,
+                iterations=args.iterations, depth=args.depth,
+                learning_rate=args.learning_rate, verbose_eval=args.verbose_eval,
+                skip_baseline_rerun=skip_baseline_rerun,
+            )
+        except Exception as e:
+            print(f"[ERROR] venue={v}: {e}")
+
+
+if __name__ == "__main__":
+    main()

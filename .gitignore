@@ -34,6 +34,7 @@ data/raw_txt/
 # 中間データ / 学習用データ
 # =========================
 data/datasets/*.csv
+data/datasets/**/*.csv
 
 # =========================
 # ログ・シミュレーション
@@ -63,6 +64,56 @@ data/models/*
 
 !data/models/trifecta_binary_catboost_児島_with_racer_no.cbm
 !data/models/trifecta_binary_catboost_児島_with_racer_no_meta.json
+
+# ▼ 選手成績特徴量ありモデル(2026-07-15、全24会場)
+!data/models/trifecta_binary_catboost_桐生_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_桐生_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_戸田_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_戸田_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_江戸川_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_江戸川_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_平和島_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_平和島_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_多摩川_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_多摩川_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_浜名湖_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_浜名湖_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_蒲郡_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_蒲郡_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_常滑_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_常滑_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_津_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_津_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_三国_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_三国_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_びわこ_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_びわこ_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_住之江_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_住之江_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_尼崎_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_尼崎_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_鳴門_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_鳴門_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_丸亀_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_丸亀_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_児島_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_児島_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_宮島_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_宮島_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_徳山_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_徳山_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_下関_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_下関_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_若松_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_若松_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_芦屋_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_芦屋_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_福岡_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_福岡_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_唐津_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_唐津_with_racer_stats_meta.json
+!data/models/trifecta_binary_catboost_大村_with_racer_stats.cbm
+!data/models/trifecta_binary_catboost_大村_with_racer_stats_meta.json
 
 !data/models/venue_buy_config.optimized.json
 
