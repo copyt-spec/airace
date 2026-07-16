@@ -3,6 +3,7 @@
 
 from __future__ import annotations
 
+import re
 import time
 from typing import Dict, Any, Optional, Tuple
 
@@ -100,8 +101,11 @@ def fetch_beforeinfo_venue(race_no: int, date: str, venue_code: int) -> Dict[str
         1: {"exhibit_time": "...", "tilt": "...", "parts": "...", "st": "...", "course": "..."},
         ...
         "weather": "...",
-        "wind_speed": "...",
-        "wind_direction": "..."
+        "wind_speed": "...",       # 生のラベル文字列(例: "1m")、後方互換用
+        "wind_speed_mps": 1.0,     # 2026-07-16追加: floatとして使えるように抽出済み
+        "wind_direction": "...",   # 後方互換用
+        "wind_dir": "...",        # 2026-07-16追加: app/controller.pyが参照するキー名
+        "wave_cm": 2.0,            # 2026-07-16追加: 波高(取得できた場合のみ存在)
       }
     """
     key = _cache_key(race_no, date, venue_code)
@@ -193,13 +197,24 @@ def fetch_beforeinfo_venue(race_no: int, date: str, venue_code: int) -> Dict[str
         data["weather"] = weather_block.get_text(strip=True)
 
     # 風速
+    # 2026-07-16修正: 生のラベル文字列(例: "1m")は_safe_float()でfloat変換に失敗して
+    # 常に0.0にフォールバックしていたため、ここで数値部分だけ抽出してfloatとして
+    # "wind_speed_mps" にも入れておく（"wind_speed"は後方互換のため文字列のまま残す）。
     wind_speed_block = soup.select_one(".weather1_bodyUnit.is-wind")
     if wind_speed_block:
         speed = wind_speed_block.select_one(".weather1_bodyUnitLabelData")
         if speed:
-            data["wind_speed"] = speed.get_text(strip=True)
+            speed_text = speed.get_text(strip=True)
+            data["wind_speed"] = speed_text
+            m_speed = re.search(r"(\d+(?:\.\d+)?)", speed_text)
+            if m_speed:
+                data["wind_speed_mps"] = float(m_speed.group(1))
 
     # 風向き
+    # 2026-07-16修正: app/controller.py の _extract_weather_set() は
+    # ["wind_dir", "風向"] というキーしか見ておらず、ここで返していた
+    # "wind_direction" は拾われず常に空文字になっていた。後方互換のため
+    # "wind_direction" は残しつつ、"wind_dir" にも同じ値を入れる。
     wind_block = soup.select_one(".weather1_bodyUnit.is-windDirection")
     if wind_block:
         icon = wind_block.select_one("p.weather1_bodyUnitImage")
@@ -218,8 +233,30 @@ def fetch_beforeinfo_venue(race_no: int, date: str, venue_code: int) -> Dict[str
                         "7": "西",
                         "8": "北西",
                     }
-                    data["wind_direction"] = wind_map.get(num, "不明")
+                    wind_dir_val = wind_map.get(num, "不明")
+                    data["wind_direction"] = wind_dir_val
+                    data["wind_dir"] = wind_dir_val
                     break
+
+    # 波高
+    # 2026-07-16修正: このファイルには波高(wave_cm)の抽出が一切存在せず、
+    # app/controller.py 側では常にデフォルトの0.0になっていた。
+    # 風速・風向きと同じ".weather1_bodyUnit"系クラス命名規則(is-wave)を
+    # 第一候補として試し、見つからない場合はページ全文から
+    # "波高 X cm" のテキストパターンを正規表現で拾うフォールバックを行う
+    # （engine/preinfo_fetcher.py で実績のあるパターンと同じ方式）。
+    wave_block = soup.select_one(".weather1_bodyUnit.is-wave")
+    if wave_block:
+        wave_label = wave_block.select_one(".weather1_bodyUnitLabelData")
+        wave_text = wave_label.get_text(strip=True) if wave_label else wave_block.get_text(strip=True)
+        m_wave = re.search(r"(\d+(?:\.\d+)?)", wave_text)
+        if m_wave:
+            data["wave_cm"] = float(m_wave.group(1))
+
+    if "wave_cm" not in data:
+        m_wave_fallback = re.search(r"波高[:：]?\s*([0-9.]+)\s*cm", res.text)
+        if m_wave_fallback:
+            data["wave_cm"] = float(m_wave_fallback.group(1))
 
     # ==========================
     # 足りない艇番は保険で埋める

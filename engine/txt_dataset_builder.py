@@ -39,6 +39,24 @@ VENUE_CODE_MAP = {
 CODE_TO_VENUE = {v: k for k, v in VENUE_CODE_MAP.items()}
 
 
+def _read_text_auto(path: str) -> str:
+    """Kファイル(raw_txt)はcp932(Shift-JIS)で書かれている。
+    2026-07-16に発見: ここが誤って encoding="utf-8", errors="ignore" で
+    読んでいたため、天候行の日本語(晴/風/南/波など)が文字化けして
+    weather/wind_dir/wind_speed_mps/wave_cmが全レースでNoneになっていた
+    (data/datasets/trifecta_train.csv全19.5M行でこの4列が100% NaNだった原因)。
+    複数エンコーディングを試すことで確実にcp932として読めるようにする。
+    """
+    for enc in ["cp932", "shift_jis", "utf-8", "utf-8-sig", "euc_jp", "latin1"]:
+        try:
+            with open(path, "r", encoding=enc) as f:
+                return f.read()
+        except Exception:
+            continue
+    with open(path, "r", encoding="utf-8", errors="ignore") as f:
+        return f.read()
+
+
 def _combo_to_class_id(combo: str) -> int:
     lanes = [1, 2, 3, 4, 5, 6]
     combos = []
@@ -144,8 +162,7 @@ def build_dataset_from_txt(cfg: TxtDatasetConfig) -> None:
 
     for fn in files:
         path = os.path.join(cfg.raw_txt_dir, fn)
-        with open(path, "r", encoding="utf-8", errors="ignore") as f:
-            text = f.read()
+        text = _read_text_auto(path)
 
         fallback_date = _date_from_filename(fn)
         records = parse_startk_multi_venue_txt(text, fallback_date=fallback_date)

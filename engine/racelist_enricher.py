@@ -9,6 +9,8 @@ from bs4 import BeautifulSoup, Tag
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 
+from engine.shared_page_cache import get_page as _get_shared_page
+
 
 UA = {
     "User-Agent": (
@@ -171,13 +173,14 @@ def _fetch_lane_stats(date: str, race_no: int, venue_code: int) -> Dict[int, Dic
     )
 
     session = _get_session()
-    r = session.get(url, timeout=(5, 20))
-    r.raise_for_status()
+    # engine.generic_racelist_fetcherが同じ出走表URLを取りに行く際にも使う
+    # 共有キャッシュ経由で取得する(同一ページの二重フェッチを避けるため。2026-07-16追加)
+    html = _get_shared_page(url, session, timeout=(5, 20), cache_seconds=_CACHE_SECONDS)
 
     try:
-        soup = BeautifulSoup(r.text, "lxml")
+        soup = BeautifulSoup(html, "lxml")
     except Exception:
-        soup = BeautifulSoup(r.text, "html.parser")
+        soup = BeautifulSoup(html, "html.parser")
 
     table = _select_best_table(soup)
     if table is None:

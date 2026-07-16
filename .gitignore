@@ -29,18 +29,26 @@ Thumbs.db
 # =========================
 data/raw_k/
 data/raw_txt/
+# リポジトリ直下にも同名の生データフォルダがあるため明示的に除外(2026-07-17追加)
+/raw_txt/
 
 # =========================
 # 中間データ / 学習用データ
 # =========================
 data/datasets/*.csv
 data/datasets/**/*.csv
+# 2026-07-17追加: 天候バグ修正時の作業でできた不要な巨大ファイル/ディレクトリ
+# (中身はcsvだが、ディレクトリ自体が未追跡扱いになるのを防ぐため明示的に除外)
+data/datasets/*.partial_discard
+data/datasets/trifecta_train_by_venue_old/
+data/datasets/trifecta_train_by_venue_partial_incomplete/
 
 # =========================
 # ログ・シミュレーション
 # =========================
 data/logs/*.csv
 data/logs/*.json
+data/logs/analysis/
 
 # ▼ Render用に必要な軽量ファイルだけ許可
 !data/logs/home_stats_1y.json

@@ -352,10 +352,42 @@ def _split_by_date(df: pd.DataFrame, test_size: float) -> Tuple[pd.DataFrame, pd
     return train_df, valid_df
 
 
-def _build_save_paths(model_dir: Path, venue: str) -> Tuple[Path, Path]:
-    model_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats.cbm"
-    meta_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats_meta.json"
+def _build_save_paths(model_dir: Path, venue: str, weight_suffix: str = "") -> Tuple[Path, Path]:
+    model_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats{weight_suffix}.cbm"
+    meta_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats{weight_suffix}_meta.json"
     return model_path, meta_path
+
+
+def _build_feature_weights(
+    feature_cols: List[str],
+    weight_targets: List[str],
+    multiplier: float,
+) -> List[float]:
+    """
+    2026-07-16追加: 「選手の勝率(win_rate_prior)の比重を重くしたら的中率が
+    上がるか」というユーザーの疑問を検証するための仕組み。
+
+    注意: CatBoostなどの決定木ベースのモデルは分割点(閾値)で学習するため、
+    特徴量の生の値をスケーリングしても木の分割自体は変わらない
+    (例: win_rate>0.35 という分割は win_rate*2>0.70 と等価で情報量は同じ)。
+    したがって「特徴量の値に定数を掛ける」やり方では的中率は一切変わらない。
+    本当に重みを変えたいなら、CatBoostが学習時に特徴量ごとの分割探索の
+    優先度を変えられる feature_weights パラメータ(Pool/fit時の重み)を使う
+    必要がある。これはヒューリスティックな重みなので「黄金比」のような
+    解析的な最適値は無く、複数の倍率で再学習して眞のholdoutで
+    hit_rate/ROIを比較する(=グリッドサーチ)以外に見つける方法は無い。
+
+    weight_targets に含まれる文字列を feature名が含む場合、multiplierを
+    掛ける(例: weight_targets=["win_rate_prior"], multiplier=4.0 なら
+    lane1_win_rate_prior 等の重みが4倍になり、他は1.0のまま)。
+    """
+    weights: List[float] = []
+    for col in feature_cols:
+        if any(target in col for target in weight_targets):
+            weights.append(float(multiplier))
+        else:
+            weights.append(1.0)
+    return weights
 
 
 def _train_one_venue(
@@ -369,6 +401,8 @@ def _train_one_venue(
     learning_rate: float,
     verbose_eval: int,
     skip_baseline_rerun: bool = False,
+    feature_weight_targets: List[str] | None = None,
+    feature_weight_multiplier: float = 1.0,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -407,7 +441,20 @@ def _train_one_venue(
 
         print(f"\n--- variant: {suffix} (feature_count={len(feature_cols)}) ---")
 
-        model = CatBoostClassifier(
+        # 選手成績特徴量(主にwin_rate_prior系)の重みを上げる実験用。
+        # デフォルト(multiplier=1.0, targets未指定)では全特徴量が重み1.0のままで、
+        # 通常学習と完全に同じ挙動になる(後方互換)。
+        feature_weights = None
+        if with_racer_stats and feature_weight_targets and feature_weight_multiplier != 1.0:
+            feature_weights = _build_feature_weights(
+                feature_cols, feature_weight_targets, feature_weight_multiplier
+            )
+            print(
+                f"[{suffix}] feature_weights適用: targets={feature_weight_targets} "
+                f"multiplier={feature_weight_multiplier}"
+            )
+
+        catboost_kwargs: Dict[str, Any] = dict(
             loss_function="Logloss",
             eval_metric="Logloss",
             iterations=iterations,
@@ -418,6 +465,10 @@ def _train_one_venue(
             scale_pos_weight=scale_pos_weight,
             allow_writing_files=False,
         )
+        if feature_weights is not None:
+            catboost_kwargs["feature_weights"] = feature_weights
+
+        model = CatBoostClassifier(**catboost_kwargs)
 
         model.fit(x_train, y_train, eval_set=(x_valid, y_valid), use_best_model=True)
 
@@ -435,13 +486,22 @@ def _train_one_venue(
 
         if suffix == "with_racer_stats":
             MODEL_DIR.mkdir(parents=True, exist_ok=True)
-            model_path, meta_path = _build_save_paths(MODEL_DIR, venue)
+
+            weight_suffix = ""
+            if feature_weights is not None:
+                # 本番の"_with_racer_stats"モデルを上書きしないよう、
+                # 重み実験のモデルは別名で保存する(例: _w4.0x)
+                weight_suffix = f"_w{feature_weight_multiplier:g}x"
+
+            model_path, meta_path = _build_save_paths(MODEL_DIR, venue, weight_suffix=weight_suffix)
             model.save_model(str(model_path))
 
             meta = {
                 "venue": venue,
                 "model_type": "catboost_binary",
                 "with_racer_stats": True,
+                "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
+                "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
                 "dataset_path": str(src),
                 "rows_total": int(len(df)),
                 "rows_train": int(len(x_train)),
@@ -479,7 +539,20 @@ def main() -> None:
         "--skip_baseline_rerun", action="store_true",
         help="比較用のbaseline再学習をスキップし、with_racer_stats版だけ学習する(--all時は時間半減のため推奨)",
     )
+    parser.add_argument(
+        "--feature_weight_targets", default="",
+        help="重みを上げたい特徴量名の部分一致文字列をカンマ区切りで指定(例: win_rate_prior)。"
+             "未指定なら通常学習(重み1.0)と完全に同じ。",
+    )
+    parser.add_argument(
+        "--feature_weight_multiplier", type=float, default=1.0,
+        help="--feature_weight_targetsに一致する特徴量へ掛ける重み倍率(例: 4.0)。"
+             "1.0なら無効(通常学習と同じ)。'黄金比'は解析的に求まらないため、"
+             "複数の値で学習しscripts/sweep_racer_stats_weight.pyで比較する想定。",
+    )
     args = parser.parse_args()
+
+    feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
 
     src = Path(args.src)
     racer_stats = _load_racer_stats()
@@ -504,6 +577,8 @@ def main() -> None:
                 iterations=args.iterations, depth=args.depth,
                 learning_rate=args.learning_rate, verbose_eval=args.verbose_eval,
                 skip_baseline_rerun=skip_baseline_rerun,
+                feature_weight_targets=feature_weight_targets,
+                feature_weight_multiplier=args.feature_weight_multiplier,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

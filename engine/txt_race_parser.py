@@ -107,21 +107,37 @@ def _date_to_yyyymmdd(s: str) -> Optional[str]:
 
 
 def _parse_weather_line(line: str) -> Dict[str, Any]:
+    """K-fileの天候行(例: "H1800m  晴　  風  南　　 3m  波　  2cm")をパースする。
+
+    2026-07-16に2つのバグを発見して修正:
+    1. 風速の正規表現が行頭の "H1800m"(距離表記)の"1800"を誤って拾っていた
+       (全レースでwind_speed_mps=1800.0という明らかにおかしい値になっていた)。
+       -> "風"より後ろの部分文字列だけを対象にすることで回避する。
+    2. 天候の正規表現が「晴れ/曇り/くもり」のような送り仮名付きの形しか
+       マッチせず、実際のデータで使われる単漢字表記「晴」「曇」にマッチせず
+       weatherが常にNoneになっていた。
+       -> 単漢字の候補も正規表現に追加した。
+    """
     out: Dict[str, Any] = {}
 
-    m_weather = re.search(r"(晴れ|曇り|雨|雪|くもり)", line)
+    if "風" in line:
+        before_wind, after_wind = line.split("風", 1)
+    else:
+        before_wind, after_wind = line, ""
+
+    m_weather = re.search(r"(晴れ|曇り|くもり|晴|曇|雨|雪)", before_wind)
     if m_weather:
         out["weather"] = m_weather.group(1)
 
-    m_wdir = re.search(r"(北東|南東|南西|北西|北|東|南|西|無風)", line)
+    m_wdir = re.search(r"(北東|南東|南西|北西|北|東|南|西|無風)", after_wind)
     if m_wdir:
         out["wind_dir"] = m_wdir.group(1)
 
-    m_wspd = re.search(r"(\d+(?:\.\d+)?)\s*m", line)
+    m_wspd = re.search(r"(\d+(?:\.\d+)?)\s*m(?!\d)", after_wind)
     if m_wspd:
         out["wind_speed_mps"] = float(m_wspd.group(1))
 
-    m_wave = re.search(r"(\d+(?:\.\d+)?)\s*cm", line)
+    m_wave = re.search(r"(\d+(?:\.\d+)?)\s*cm", after_wind)
     if m_wave:
         out["wave_cm"] = float(m_wave.group(1))
 

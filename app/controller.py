@@ -1,52 +1,91 @@
 from __future__ import annotations
 
+import os
 import time
+from concurrent.futures import ThreadPoolExecutor
 from typing import Any, Dict, List, Optional, Tuple
 
-from engine.marugame_fetcher import fetch_all_entries_once as fetch_all_marugame_entries_once
-from engine.toda_fetcher import fetch_all_toda_entries_once, fetch_toda_racelist
-from engine.kojima_fetcher import fetch_all_kojima_entries_once, fetch_kojima_racelist
-from engine.suminoe_fetcher import fetch_all_suminoe_entries_once, fetch_suminoe_racelist
-
+from engine.generic_racelist_fetcher import (
+    fetch_all_entries_once_by_venue,
+    fetch_racelist_by_venue,
+)
 from engine.odds_fetcher import fetch_odds
-from engine.beforeinfo_fetcher import fetch_beforeinfo
 from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
 from engine.racelist_enricher import enrich_entries_with_racelist
-from engine.buy_selector import select_best_bets
+from engine.buy_selector import select_best_bets, should_skip_race
+from engine.kelly_allocator import kelly_size_selected_bets
+from engine.formation_builder import build_formation_options
 from engine.model_loader_catboost_binary import BinaryCatBoostVenueModel
-
-
-JCD_MARUGAME = 15
-JCD_TODA = 2
-JCD_KOJIMA = 16
-JCD_SUMINOE = 12
+from engine.model_loader_catboost_global_venue_auto import GlobalVenueAutoCatBoostModel
+from engine.venue_registry import (
+    VENUE_ORDER,
+    get_jcd,
+    normalize_venue_name,
+)
 
 
 class RaceController:
-    # =========================
-    # 共有キャッシュ
-    # =========================
     _all_entries_cache: Dict[Tuple[str, str], Dict[str, Any]] = {}
     _race_entries_cache: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
     _enriched_entries_cache: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
     _beforeinfo_cache: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
     _odds_cache: Dict[Tuple[str, str, int], Dict[str, Any]] = {}
 
-    # TTL秒
     _TTL_ALL_ENTRIES = 1800
     _TTL_RACE_ENTRIES = 1800
     _TTL_ENRICHED = 1800
     _TTL_BEFOREINFO = 180
     _TTL_ODDS = 180
 
-    def __init__(self) -> None:
-        self.binary_model = BinaryCatBoostVenueModel(
+    # 2026-07-16追加: Kellyサイジングの前提バンクロール(円)。
+    # 実際の資産額はユーザーごとに違うので環境変数で上書き可能にしておく。
+    # ROI%自体を上げる施策ではなく、選ばれた買い目に対してエッジの大きさに
+    # 応じて賭け金を傾斜配分し、資産の成長効率を上げるためのもの。
+    _BANKROLL_YEN = int(os.environ.get("BOAT_BANKROLL_YEN", "100000"))
+
+    def __init__(
+        self,
+        model_mode: str | None = None,
+        debug: bool = False,
+    ) -> None:
+        self.debug = debug
+        self.model_mode = self._resolve_model_mode(model_mode)
+
+        self.venue_model = BinaryCatBoostVenueModel(
             model_dir="data/models",
-            debug=False,
+            debug=debug,
+            fallback_venue="丸亀",
+        )
+
+        self.global_auto_model = GlobalVenueAutoCatBoostModel(
+            model_dir="data/models",
+            model_name="trifecta_binary_catboost_global_venue_auto",
+            debug=debug,
         )
 
     # =========================
-    # キャッシュ共通
+    # model mode
+    # =========================
+    def _resolve_model_mode(self, model_mode: str | None) -> str:
+        mode = str(model_mode or os.environ.get("BOAT_MODEL_MODE", "venue")).strip().lower()
+        if mode not in {"venue", "global_auto"}:
+            mode = "venue"
+        return mode
+
+    def set_model_mode(self, model_mode: str) -> None:
+        self.model_mode = self._resolve_model_mode(model_mode)
+
+    def get_model_mode(self) -> str:
+        return self.model_mode
+
+    def _get_active_model(self, model_mode: str | None = None):
+        mode = self._resolve_model_mode(model_mode or self.model_mode)
+        if mode == "global_auto":
+            return self.global_auto_model, "global_auto"
+        return self.venue_model, "venue"
+
+    # =========================
+    # cache
     # =========================
     def _cache_get(self, cache: Dict[Any, Dict[str, Any]], key: Any, ttl_sec: int) -> Optional[Any]:
         item = cache.get(key)
@@ -92,7 +131,7 @@ class RaceController:
         trim(self._odds_cache, self._TTL_ODDS)
 
     # =========================
-    # 共通小物
+    # utils
     # =========================
     def _safe_float(self, v: Any, default: float = 0.0) -> float:
         try:
@@ -116,23 +155,8 @@ class RaceController:
                 return row.get(key)
         return default
 
-    def _normalize_grade(self, raw: Any) -> str:
-        s = str(raw or "").strip().upper()
-        if s in {"A1", "A2", "B1", "B2"}:
-            return s
-        return ""
-
     def _normalize_venue_name(self, venue_name: str) -> str:
-        v = str(venue_name or "").strip()
-        if "丸亀" in v:
-            return "丸亀"
-        if "戸田" in v:
-            return "戸田"
-        if "児島" in v:
-            return "児島"
-        if "住之江" in v:
-            return "住之江"
-        return v
+        return normalize_venue_name(venue_name)
 
     def _dedupe_by_lane(self, rows: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
         lane_map: Dict[int, Dict[str, Any]] = {}
@@ -147,151 +171,77 @@ class RaceController:
         lanes = [self._safe_int(x.get("lane", 0), 0) for x in rows]
         return len(rows) == 6 and sorted(lanes) == [1, 2, 3, 4, 5, 6]
 
+    def get_supported_venues(self) -> List[str]:
+        return list(VENUE_ORDER)
+
     # =========================
-    # 一覧用（場ごと全件）
+    # entries
     # =========================
-    def get_all_entries(self, date: str) -> List[Dict[str, Any]]:
+    def get_all_entries(self, venue_name: str, date: str) -> List[Dict[str, Any]]:
         self._trim_old_cache()
-        key = ("丸亀", date)
+        venue_name = self._normalize_venue_name(venue_name)
+        key = (venue_name, date)
+
         cached = self._cache_get(self._all_entries_cache, key, self._TTL_ALL_ENTRIES)
         if cached is not None:
             return cached
 
-        data = fetch_all_marugame_entries_once(date)
+        data = fetch_all_entries_once_by_venue(venue_name=venue_name, date=date)
         data = [dict(x) for x in data]
         return self._cache_set(self._all_entries_cache, key, data)
 
-    def get_all_entries_toda(self, date: str) -> List[Dict[str, Any]]:
+    def get_entries_race(self, venue_name: str, date: str, race_no: int) -> List[Dict[str, Any]]:
         self._trim_old_cache()
-        key = ("戸田", date)
-        cached = self._cache_get(self._all_entries_cache, key, self._TTL_ALL_ENTRIES)
-        if cached is not None:
-            return cached
+        venue_name = self._normalize_venue_name(venue_name)
+        key = (venue_name, date, int(race_no))
 
-        data = fetch_all_toda_entries_once(date)
-        data = [dict(x) for x in data]
-        return self._cache_set(self._all_entries_cache, key, data)
-
-    def get_all_entries_kojima(self, date: str) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("児島", date)
-        cached = self._cache_get(self._all_entries_cache, key, self._TTL_ALL_ENTRIES)
-        if cached is not None:
-            return cached
-
-        data = fetch_all_kojima_entries_once(date)
-        data = [dict(x) for x in data]
-        return self._cache_set(self._all_entries_cache, key, data)
-
-    def get_all_entries_suminoe(self, date: str) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("住之江", date)
-        cached = self._cache_get(self._all_entries_cache, key, self._TTL_ALL_ENTRIES)
-        if cached is not None:
-            return cached
-
-        data = fetch_all_suminoe_entries_once(date)
-        data = [dict(x) for x in data]
-        return self._cache_set(self._all_entries_cache, key, data)
-
-    # =========================
-    # 1R詳細用
-    # =========================
-    def get_entries_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("丸亀", date, int(race_no))
         cached = self._cache_get(self._race_entries_cache, key, self._TTL_RACE_ENTRIES)
         if cached is not None:
             return cached
 
-        all_entries = self.get_all_entries(date)
+        # 2026-07-16修正: 以前はここで必ず get_all_entries()(=当日12レース分を
+        # 4並列でまとめて取得)を呼んでから該当レースだけを抜き出していたため、
+        # 1レースだけ見たい時でも12レース分のページ取得完了を待つ必要があり、
+        # 「情報取得が遅い」という体感の主因になっていた。
+        # 既にその日のall_entriesキャッシュが温まっていればそれを使い、
+        # 無ければ該当レース1件だけを直接取得する高速パスを先に試す。
+        # (取得漏れ・パース失敗時のみ、保険として全レース取得にフォールバック)
         out: List[Dict[str, Any]] = []
 
-        for row in all_entries:
-            try:
-                if int(row.get("race_no", 0)) == int(race_no):
-                    out.append(dict(row))
-            except Exception:
-                continue
-
-        out = self._dedupe_by_lane(out)
-        out.sort(key=lambda x: int(x.get("lane", 0)))
-        return self._cache_set(self._race_entries_cache, key, out)
-
-    def get_entries_toda_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("戸田", date, int(race_no))
-        cached = self._cache_get(self._race_entries_cache, key, self._TTL_RACE_ENTRIES)
-        if cached is not None:
-            return cached
-
-        all_entries = self.get_all_entries_toda(date)
-        out = []
-        for row in all_entries:
-            try:
-                if int(row.get("race_no", 0)) == int(race_no):
-                    out.append(dict(row))
-            except Exception:
-                continue
+        all_entries_cached = self._cache_get(
+            self._all_entries_cache, (venue_name, date), self._TTL_ALL_ENTRIES
+        )
+        if all_entries_cached is not None:
+            for row in all_entries_cached:
+                try:
+                    if int(row.get("race_no", 0)) == int(race_no):
+                        out.append(dict(row))
+                except Exception:
+                    continue
 
         if not out:
-            rows = fetch_toda_racelist(race_no, date)
-            out = [dict(x) for x in rows]
-
-        out = self._dedupe_by_lane(out)
-        out.sort(key=lambda x: int(x.get("lane", 0)))
-        return self._cache_set(self._race_entries_cache, key, out)
-
-    def get_entries_kojima_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("児島", date, int(race_no))
-        cached = self._cache_get(self._race_entries_cache, key, self._TTL_RACE_ENTRIES)
-        if cached is not None:
-            return cached
-
-        all_entries = self.get_all_entries_kojima(date)
-        out = []
-        for row in all_entries:
             try:
-                if int(row.get("race_no", 0)) == int(race_no):
-                    out.append(dict(row))
+                rows = fetch_racelist_by_venue(venue_name=venue_name, race_no=race_no, date=date)
+                out = [dict(x) for x in rows]
             except Exception:
-                continue
+                out = []
 
         if not out:
-            rows = fetch_kojima_racelist(race_no, date)
-            out = [dict(x) for x in rows]
-
-        out = self._dedupe_by_lane(out)
-        out.sort(key=lambda x: int(x.get("lane", 0)))
-        return self._cache_set(self._race_entries_cache, key, out)
-
-    def get_entries_suminoe_race(self, date: str, race_no: int) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("住之江", date, int(race_no))
-        cached = self._cache_get(self._race_entries_cache, key, self._TTL_RACE_ENTRIES)
-        if cached is not None:
-            return cached
-
-        all_entries = self.get_all_entries_suminoe(date)
-        out = []
-        for row in all_entries:
-            try:
-                if int(row.get("race_no", 0)) == int(race_no):
-                    out.append(dict(row))
-            except Exception:
-                continue
-
-        if not out:
-            rows = fetch_suminoe_racelist(race_no, date)
-            out = [dict(x) for x in rows]
+            # 単一レース取得も失敗した場合のみ、保険として当日全レースを取得
+            all_entries = self.get_all_entries(venue_name, date)
+            for row in all_entries:
+                try:
+                    if int(row.get("race_no", 0)) == int(race_no):
+                        out.append(dict(row))
+                except Exception:
+                    continue
 
         out = self._dedupe_by_lane(out)
         out.sort(key=lambda x: int(x.get("lane", 0)))
         return self._cache_set(self._race_entries_cache, key, out)
 
     # =========================
-    # odds grouped形式
+    # odds
     # =========================
     def _group_odds(self, raw_odds: Dict[str, Any]) -> Dict[str, Any]:
         grouped = {i: {} for i in range(1, 7)}
@@ -330,189 +280,67 @@ class RaceController:
                 continue
         return out
 
-    # =========================
-    # odds
-    # =========================
-    def get_odds_only(self, race_no: int, date: str) -> Dict[str, Any]:
+    def get_odds_only(self, venue_name: str, race_no: int, date: str) -> Dict[str, Any]:
         self._trim_old_cache()
-        key = ("丸亀", date, int(race_no))
+        venue_name = self._normalize_venue_name(venue_name)
+        key = (venue_name, date, int(race_no))
+
         cached = self._cache_get(self._odds_cache, key, self._TTL_ODDS)
         if cached is not None:
             return cached
 
-        raw_odds = fetch_odds(race_no, date, venue_code=JCD_MARUGAME)
-        grouped = self._group_odds(raw_odds)
-        return self._cache_set(self._odds_cache, key, grouped)
-
-    def get_odds_only_toda(self, race_no: int, date: str) -> Dict[str, Any]:
-        self._trim_old_cache()
-        key = ("戸田", date, int(race_no))
-        cached = self._cache_get(self._odds_cache, key, self._TTL_ODDS)
-        if cached is not None:
-            return cached
-
-        raw_odds = fetch_odds(race_no, date, venue_code=JCD_TODA)
-        grouped = self._group_odds(raw_odds)
-        return self._cache_set(self._odds_cache, key, grouped)
-
-    def get_odds_only_kojima(self, race_no: int, date: str) -> Dict[str, Any]:
-        self._trim_old_cache()
-        key = ("児島", date, int(race_no))
-        cached = self._cache_get(self._odds_cache, key, self._TTL_ODDS)
-        if cached is not None:
-            return cached
-
-        raw_odds = fetch_odds(race_no, date, venue_code=JCD_KOJIMA)
-        grouped = self._group_odds(raw_odds)
-        return self._cache_set(self._odds_cache, key, grouped)
-
-    def get_odds_only_suminoe(self, race_no: int, date: str) -> Dict[str, Any]:
-        self._trim_old_cache()
-        key = ("住之江", date, int(race_no))
-        cached = self._cache_get(self._odds_cache, key, self._TTL_ODDS)
-        if cached is not None:
-            return cached
-
-        raw_odds = fetch_odds(race_no, date, venue_code=JCD_SUMINOE)
+        venue_code = get_jcd(venue_name)
+        raw_odds = fetch_odds(race_no, date, venue_code=venue_code)
         grouped = self._group_odds(raw_odds)
         return self._cache_set(self._odds_cache, key, grouped)
 
     # =========================
     # beforeinfo
     # =========================
-    def get_beforeinfo_only(self, race_no: int, date: str) -> Dict[str, Any]:
+    def get_beforeinfo_only(self, venue_name: str, race_no: int, date: str) -> Dict[str, Any]:
         self._trim_old_cache()
-        key = ("丸亀", date, int(race_no))
+        venue_name = self._normalize_venue_name(venue_name)
+        key = (venue_name, date, int(race_no))
+
         cached = self._cache_get(self._beforeinfo_cache, key, self._TTL_BEFOREINFO)
         if cached is not None:
             return cached
 
-        data = fetch_beforeinfo(race_no, date)
-        return self._cache_set(self._beforeinfo_cache, key, data)
-
-    def get_beforeinfo_only_toda(self, race_no: int, date: str) -> Dict[str, Any]:
-        self._trim_old_cache()
-        key = ("戸田", date, int(race_no))
-        cached = self._cache_get(self._beforeinfo_cache, key, self._TTL_BEFOREINFO)
-        if cached is not None:
-            return cached
-
-        data = fetch_beforeinfo_venue(race_no, date, venue_code=JCD_TODA)
-        return self._cache_set(self._beforeinfo_cache, key, data)
-
-    def get_beforeinfo_only_kojima(self, race_no: int, date: str) -> Dict[str, Any]:
-        self._trim_old_cache()
-        key = ("児島", date, int(race_no))
-        cached = self._cache_get(self._beforeinfo_cache, key, self._TTL_BEFOREINFO)
-        if cached is not None:
-            return cached
-
-        data = fetch_beforeinfo_venue(race_no, date, venue_code=JCD_KOJIMA)
-        return self._cache_set(self._beforeinfo_cache, key, data)
-
-    def get_beforeinfo_only_suminoe(self, race_no: int, date: str) -> Dict[str, Any]:
-        self._trim_old_cache()
-        key = ("住之江", date, int(race_no))
-        cached = self._cache_get(self._beforeinfo_cache, key, self._TTL_BEFOREINFO)
-        if cached is not None:
-            return cached
-
-        data = fetch_beforeinfo_venue(race_no, date, venue_code=JCD_SUMINOE)
+        venue_code = get_jcd(venue_name)
+        data = fetch_beforeinfo_venue(race_no, date, venue_code=venue_code)
         return self._cache_set(self._beforeinfo_cache, key, data)
 
     # =========================
-    # motor/boat enrich
+    # enrich
     # =========================
-    def enrich_entries_marugame(
+    def enrich_entries(
         self,
+        venue_name: str,
         entries: List[Dict[str, Any]],
         date: str,
         race_no: int,
     ) -> List[Dict[str, Any]]:
         self._trim_old_cache()
-        key = ("丸亀", date, int(race_no))
+        venue_name = self._normalize_venue_name(venue_name)
+        key = (venue_name, date, int(race_no))
+
         cached = self._cache_get(self._enriched_entries_cache, key, self._TTL_ENRICHED)
         if cached is not None:
             return cached
 
+        venue_code = get_jcd(venue_name)
         data = enrich_entries_with_racelist(
             entries,
             date=date,
             race_no=race_no,
-            venue_code=JCD_MARUGAME,
-        )
-        data = self._dedupe_by_lane([dict(x) for x in data])
-        data.sort(key=lambda x: int(x.get("lane", 0)))
-        return self._cache_set(self._enriched_entries_cache, key, data)
-
-    def enrich_entries_toda(
-        self,
-        entries: List[Dict[str, Any]],
-        date: str,
-        race_no: int,
-    ) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("戸田", date, int(race_no))
-        cached = self._cache_get(self._enriched_entries_cache, key, self._TTL_ENRICHED)
-        if cached is not None:
-            return cached
-
-        data = enrich_entries_with_racelist(
-            entries,
-            date=date,
-            race_no=race_no,
-            venue_code=JCD_TODA,
-        )
-        data = self._dedupe_by_lane([dict(x) for x in data])
-        data.sort(key=lambda x: int(x.get("lane", 0)))
-        return self._cache_set(self._enriched_entries_cache, key, data)
-
-    def enrich_entries_kojima(
-        self,
-        entries: List[Dict[str, Any]],
-        date: str,
-        race_no: int,
-    ) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("児島", date, int(race_no))
-        cached = self._cache_get(self._enriched_entries_cache, key, self._TTL_ENRICHED)
-        if cached is not None:
-            return cached
-
-        data = enrich_entries_with_racelist(
-            entries,
-            date=date,
-            race_no=race_no,
-            venue_code=JCD_KOJIMA,
-        )
-        data = self._dedupe_by_lane([dict(x) for x in data])
-        data.sort(key=lambda x: int(x.get("lane", 0)))
-        return self._cache_set(self._enriched_entries_cache, key, data)
-
-    def enrich_entries_suminoe(
-        self,
-        entries: List[Dict[str, Any]],
-        date: str,
-        race_no: int,
-    ) -> List[Dict[str, Any]]:
-        self._trim_old_cache()
-        key = ("住之江", date, int(race_no))
-        cached = self._cache_get(self._enriched_entries_cache, key, self._TTL_ENRICHED)
-        if cached is not None:
-            return cached
-
-        data = enrich_entries_with_racelist(
-            entries,
-            date=date,
-            race_no=race_no,
-            venue_code=JCD_SUMINOE,
+            venue_code=venue_code,
         )
         data = self._dedupe_by_lane([dict(x) for x in data])
         data.sort(key=lambda x: int(x.get("lane", 0)))
         return self._cache_set(self._enriched_entries_cache, key, data)
 
     # =========================
-    # beforeinfo 正規化
+    # beforeinfo normalize
     # =========================
     def _normalize_beforeinfo(self, beforeinfo: Dict[str, Any]) -> Dict[int, Dict[str, Any]]:
         lane_map: Dict[int, Dict[str, Any]] = {}
@@ -597,7 +425,7 @@ class RaceController:
         }
 
     # =========================
-    # AI入力用
+    # AI input build
     # =========================
     def _to_ai_entries(
         self,
@@ -665,6 +493,7 @@ class RaceController:
 
         lane_map = {int(x["lane"]): x for x in ai_entries}
         rows: List[Dict[str, Any]] = []
+        venue_code = get_jcd(venue_name)
 
         for a in range(1, 7):
             for b in range(1, 7):
@@ -680,12 +509,7 @@ class RaceController:
                         "race_key": f"{venue_name}_{date}_{race_no}",
                         "date": date,
                         "venue": venue_name,
-                        "venue_code": (
-                            JCD_MARUGAME if venue_name == "丸亀"
-                            else JCD_TODA if venue_name == "戸田"
-                            else JCD_KOJIMA if venue_name == "児島"
-                            else JCD_SUMINOE
-                        ),
+                        "venue_code": venue_code,
                         "race_no": race_no,
                         "combo": combo,
                         "combo_first_lane": a,
@@ -749,6 +573,11 @@ class RaceController:
         )
 
         if not best_bets:
+            # best_betsが空でも、それが「意図的な見送り(低信頼度レースを買わない戦略)」
+            # によるものなら、素朴なフォールバックで無理に賭けてしまわないようにする。
+            if should_skip_race(ai_preds, venue=venue_name):
+                return []
+
             fallback = sorted(
                 ai_preds,
                 key=lambda x: float(x.get("score", 0.0)),
@@ -762,24 +591,30 @@ class RaceController:
 
         return best_bets
 
+    # =========================
+    # predict
+    # =========================
     def _predict_bundle(
         self,
         *,
         date: str,
         race_no: int,
         venue_name: str,
-        venue_code: int,
         base_entries: List[Dict[str, Any]],
         beforeinfo: Dict[str, Any],
         enriched_entries: List[Dict[str, Any]] | None,
         top_n: int,
         with_odds: bool,
+        model_mode: str | None = None,
+        raw_odds: Dict[str, Any] | None = None,
     ) -> Dict[str, Any]:
         out = {
             "best_bets": [],
             "prob_map": {},
             "odds_map": {},
             "df120_rows": [],
+            "formation_options": [],
+            "model_mode": self._resolve_model_mode(model_mode or self.model_mode),
         }
 
         if not self._is_valid_6boats(base_entries):
@@ -811,13 +646,20 @@ class RaceController:
         odds_map: Dict[str, float] = {}
         if with_odds:
             try:
-                raw_odds = fetch_odds(race_no, date, venue_code=venue_code)
-                odds_map = self._flat_odds_map(raw_odds)
+                # 呼び出し元(get_ai_prediction_bundle)が並列取得済みのオッズを
+                # 渡してくれる場合はそれを使い、二重フェッチしない(2026-07-16改善)。
+                # 渡されていない場合(単体呼び出し等)は従来通りここで取得する。
+                _raw_odds = raw_odds if raw_odds is not None else fetch_odds(
+                    race_no, date, venue_code=get_jcd(venue_name)
+                )
+                odds_map = self._flat_odds_map(_raw_odds)
             except Exception:
                 odds_map = {}
 
         try:
-            prob_map = self.binary_model.predict_proba(df120, venue_name)
+            model, resolved_mode = self._get_active_model(model_mode)
+            prob_map = model.predict_proba(df120, venue_name)
+            out["model_mode"] = resolved_mode
         except Exception:
             prob_map = {}
 
@@ -831,194 +673,179 @@ class RaceController:
             venue_name=venue_name,
         )
 
+        # 2026-07-16追加: 選定自体(buy_selector)はそのままに、賭け金だけを
+        # 単点ケリー基準で傾斜配分する。エラー時は賭け金無し(0円)の
+        # 表示になるだけで、選定結果自体には影響させない(フェイルセーフ)。
+        try:
+            best_bets = kelly_size_selected_bets(best_bets, bankroll=self._BANKROLL_YEN)
+        except Exception:
+            pass
+
+        # 2026-07-17追加: prob_map(120通りの予測確率、再推論不要)から
+        # フォーメーション形式(1着/2着/3着候補の絞り込み)の案も一緒に出す。
+        # buy_selectorの点買い選定とは独立な、別の見せ方の提案。
+        try:
+            formation_options = build_formation_options(prob_map, odds_map=odds_map)
+        except Exception:
+            formation_options = []
+
         out["best_bets"] = best_bets
         out["prob_map"] = prob_map
         out["odds_map"] = odds_map
         out["df120_rows"] = df120_rows
+        out["formation_options"] = formation_options
         return out
 
-    # =========================
-    # 旧互換
-    # =========================
-    def get_ai_predictions_marugame(
-        self,
-        date: str,
-        race_no: int,
-        top_n: int = 20,
-        with_odds: bool = True,
-    ) -> List[Dict[str, Any]]:
-        bundle = self.get_ai_prediction_bundle_marugame(date, race_no, top_n=top_n, with_odds=with_odds)
-        return bundle.get("best_bets", [])
-
-    def get_ai_predictions_toda(
-        self,
-        date: str,
-        race_no: int,
-        top_n: int = 20,
-        with_odds: bool = True,
-    ) -> List[Dict[str, Any]]:
-        bundle = self.get_ai_prediction_bundle_toda(date, race_no, top_n=top_n, with_odds=with_odds)
-        return bundle.get("best_bets", [])
-
-    def get_ai_predictions_kojima(
-        self,
-        date: str,
-        race_no: int,
-        top_n: int = 20,
-        with_odds: bool = True,
-    ) -> List[Dict[str, Any]]:
-        bundle = self.get_ai_prediction_bundle_kojima(date, race_no, top_n=top_n, with_odds=with_odds)
-        return bundle.get("best_bets", [])
-
-    def get_ai_predictions_suminoe(
-        self,
-        date: str,
-        race_no: int,
-        top_n: int = 20,
-        with_odds: bool = True,
-    ) -> List[Dict[str, Any]]:
-        bundle = self.get_ai_prediction_bundle_suminoe(date, race_no, top_n=top_n, with_odds=with_odds)
-        return bundle.get("best_bets", [])
-
-    # =========================
-    # full bundle
-    # =========================
-    def get_ai_prediction_bundle_marugame(
-        self,
-        date: str,
-        race_no: int,
-        top_n: int = 20,
-        with_odds: bool = True,
-    ) -> Dict[str, Any]:
+    def _fetch_entries_and_enrich(
+        self, venue_name: str, date: str, race_no: int
+    ) -> Tuple[List[Dict[str, Any]], Optional[List[Dict[str, Any]]]]:
         try:
-            base_entries = self.get_entries_race(date, race_no)
+            base_entries = self.get_entries_race(venue_name, date, race_no)
         except Exception:
-            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
+            return [], None
 
         try:
-            enriched_entries = self.enrich_entries_marugame(base_entries, date, race_no)
+            enriched_entries = self.enrich_entries(venue_name, base_entries, date, race_no)
             enriched_entries = self._dedupe_by_lane(enriched_entries)
         except Exception:
             enriched_entries = None
 
-        try:
-            beforeinfo = self.get_beforeinfo_only(race_no, date)
-        except Exception:
-            beforeinfo = {}
+        return base_entries, enriched_entries
+
+    def get_ai_prediction_bundle(
+        self,
+        venue_name: str,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+        model_mode: str | None = None,
+    ) -> Dict[str, Any]:
+        venue_name = self._normalize_venue_name(venue_name)
+
+        empty_out = {
+            "best_bets": [],
+            "prob_map": {},
+            "odds_map": {},
+            "df120_rows": [],
+            "formation_options": [],
+            "model_mode": self._resolve_model_mode(model_mode or self.model_mode),
+        }
+
+        # 出走表+選手成績(同じページを参照するので内部で直列)/ 直前情報 / オッズ は
+        # それぞれ別URLへの独立したHTTP取得なので並列化する。
+        # 以前はこの3系統を順番に(1つずつ待って)取得しており、
+        # 「オッズ取得・レーサー情報取得が遅い」という体感の主因になっていた。
+        # (2026-07-16、ユーザー指摘を受けて改善)
+        _t0 = time.monotonic()
+
+        with ThreadPoolExecutor(max_workers=3) as ex:
+            fut_entries = ex.submit(self._fetch_entries_and_enrich, venue_name, date, race_no)
+            fut_beforeinfo = ex.submit(self.get_beforeinfo_only, venue_name, race_no, date)
+            fut_odds = ex.submit(fetch_odds, race_no, date, get_jcd(venue_name)) if with_odds else None
+
+            base_entries, enriched_entries = fut_entries.result()
+
+            try:
+                beforeinfo = fut_beforeinfo.result()
+            except Exception:
+                beforeinfo = {}
+
+            raw_odds: Dict[str, Any] = {}
+            if fut_odds is not None:
+                try:
+                    raw_odds = fut_odds.result()
+                except Exception:
+                    raw_odds = {}
+
+        if self.debug:
+            print(f"[TIMING] get_ai_prediction_bundle parallel fetch took {time.monotonic() - _t0:.2f}s")
+
+        if not base_entries:
+            return empty_out
 
         return self._predict_bundle(
             date=date,
             race_no=race_no,
-            venue_name="丸亀",
-            venue_code=JCD_MARUGAME,
+            venue_name=venue_name,
             base_entries=base_entries,
             beforeinfo=beforeinfo,
             enriched_entries=enriched_entries,
             top_n=top_n,
             with_odds=with_odds,
+            model_mode=model_mode,
+            raw_odds=raw_odds,
         )
 
-    def get_ai_prediction_bundle_toda(
+    def get_ai_predictions(
         self,
+        venue_name: str,
+        date: str,
+        race_no: int,
+        top_n: int = 20,
+        with_odds: bool = True,
+        model_mode: str | None = None,
+    ) -> List[Dict[str, Any]]:
+        bundle = self.get_ai_prediction_bundle(
+            venue_name=venue_name,
+            date=date,
+            race_no=race_no,
+            top_n=top_n,
+            with_odds=with_odds,
+            model_mode=model_mode,
+        )
+        return bundle.get("best_bets", [])
+
+    # =========================
+    # legacy convenience wrappers
+    # =========================
+    def get_ai_prediction_bundle_with_active_model(
+        self,
+        venue_name: str,
         date: str,
         race_no: int,
         top_n: int = 20,
         with_odds: bool = True,
     ) -> Dict[str, Any]:
-        try:
-            base_entries = self.get_entries_toda_race(date, race_no)
-        except Exception:
-            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
-
-        try:
-            enriched_entries = self.enrich_entries_toda(base_entries, date, race_no)
-            enriched_entries = self._dedupe_by_lane(enriched_entries)
-        except Exception:
-            enriched_entries = None
-
-        try:
-            beforeinfo = self.get_beforeinfo_only_toda(race_no, date)
-        except Exception:
-            beforeinfo = {}
-
-        return self._predict_bundle(
+        return self.get_ai_prediction_bundle(
+            venue_name=venue_name,
             date=date,
             race_no=race_no,
-            venue_name="戸田",
-            venue_code=JCD_TODA,
-            base_entries=base_entries,
-            beforeinfo=beforeinfo,
-            enriched_entries=enriched_entries,
             top_n=top_n,
             with_odds=with_odds,
+            model_mode=self.model_mode,
         )
 
-    def get_ai_prediction_bundle_kojima(
+    def get_ai_prediction_bundle_venue_model(
         self,
+        venue_name: str,
         date: str,
         race_no: int,
         top_n: int = 20,
         with_odds: bool = True,
     ) -> Dict[str, Any]:
-        try:
-            base_entries = self.get_entries_kojima_race(date, race_no)
-        except Exception:
-            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
-
-        try:
-            enriched_entries = self.enrich_entries_kojima(base_entries, date, race_no)
-            enriched_entries = self._dedupe_by_lane(enriched_entries)
-        except Exception:
-            enriched_entries = None
-
-        try:
-            beforeinfo = self.get_beforeinfo_only_kojima(race_no, date)
-        except Exception:
-            beforeinfo = {}
-
-        return self._predict_bundle(
+        return self.get_ai_prediction_bundle(
+            venue_name=venue_name,
             date=date,
             race_no=race_no,
-            venue_name="児島",
-            venue_code=JCD_KOJIMA,
-            base_entries=base_entries,
-            beforeinfo=beforeinfo,
-            enriched_entries=enriched_entries,
             top_n=top_n,
             with_odds=with_odds,
+            model_mode="venue",
         )
 
-    def get_ai_prediction_bundle_suminoe(
+    def get_ai_prediction_bundle_global_auto_model(
         self,
+        venue_name: str,
         date: str,
         race_no: int,
         top_n: int = 20,
         with_odds: bool = True,
     ) -> Dict[str, Any]:
-        try:
-            base_entries = self.get_entries_suminoe_race(date, race_no)
-        except Exception:
-            return {"best_bets": [], "prob_map": {}, "odds_map": {}, "df120_rows": []}
-
-        try:
-            enriched_entries = self.enrich_entries_suminoe(base_entries, date, race_no)
-            enriched_entries = self._dedupe_by_lane(enriched_entries)
-        except Exception:
-            enriched_entries = None
-
-        try:
-            beforeinfo = self.get_beforeinfo_only_suminoe(race_no, date)
-        except Exception:
-            beforeinfo = {}
-
-        return self._predict_bundle(
+        return self.get_ai_prediction_bundle(
+            venue_name=venue_name,
             date=date,
             race_no=race_no,
-            venue_name="住之江",
-            venue_code=JCD_SUMINOE,
-            base_entries=base_entries,
-            beforeinfo=beforeinfo,
-            enriched_entries=enriched_entries,
             top_n=top_n,
             with_odds=with_odds,
+            model_mode="global_auto",
         )

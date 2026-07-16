@@ -18,6 +18,12 @@ except Exception as e:
     RaceController = None  # type: ignore
 
 from engine.prediction_logger import build_prediction_rows, save_prediction_rows
+from engine.venue_registry import (
+    VENUE_MASTER,
+    VENUE_ORDER,
+    get_venue_name_by_key,
+    normalize_venue_name,
+)
 
 
 app = Flask(__name__, template_folder="templates", static_folder="static")
@@ -142,20 +148,17 @@ def _grouped_odds_to_flat_map(grouped_odds: Dict[str, Any] | None) -> Dict[str, 
 
 
 def _normalize_venue_name(v: str) -> str:
-    s = str(v or "").strip()
-    if "丸亀" in s:
-        return "丸亀"
-    if "戸田" in s:
-        return "戸田"
-    if "児島" in s:
-        return "児島"
-    if "住之江" in s:
-        return "住之江"
+    return normalize_venue_name(v)
+
+
+def _resolve_model_mode(v: str | None) -> str:
+    s = str(v or "").strip().lower()
+    if s not in {"venue", "global_auto"}:
+        return "venue"
     return s
 
 
 def _empty_stats_map() -> Dict[str, Dict[str, Any]]:
-    venue_order = ["丸亀", "戸田", "児島", "住之江"]
     empty_row = {
         "race_count": 0,
         "buy_count": 0,
@@ -167,7 +170,7 @@ def _empty_stats_map() -> Dict[str, Dict[str, Any]]:
         "total_profit": 0.0,
         "roi": 0.0,
     }
-    return {v: dict(empty_row) for v in venue_order}
+    return {v: dict(empty_row) for v in VENUE_ORDER}
 
 
 def _load_home_stats_json() -> Dict[str, Dict[str, Any]]:
@@ -183,7 +186,7 @@ def _load_home_stats_json() -> Dict[str, Dict[str, Any]]:
 
     stats = data.get("stats", {})
     out = _empty_stats_map()
-    for venue in ["丸亀", "戸田", "児島", "住之江"]:
+    for venue in VENUE_ORDER:
         if venue in stats and isinstance(stats[venue], dict):
             out[venue].update(stats[venue])
     return out
@@ -245,7 +248,7 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     if selected_df.empty:
         return out
 
-    for venue in ["丸亀", "戸田", "児島", "住之江"]:
+    for venue in VENUE_ORDER:
         vdf = selected_df[selected_df["venue_norm"] == venue].copy()
         if vdf.empty:
             continue
@@ -279,32 +282,105 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     return out
 
 
-def _build_sim_stats(start_date: str, end_date: str) -> Tuple[Dict[str, Dict[str, Any]], Dict[str, Any]]:
-    df = _load_sim_light_df()
-
-    meta = {
-        "start_date": start_date,
-        "end_date": end_date,
-        "available_min_date": "",
-        "available_max_date": "",
-        "row_count": 0,
-    }
-
+def _build_daily_timeseries(df: pd.DataFrame) -> List[Dict[str, Any]]:
     if df.empty:
-        return _aggregate_stats_from_df(df), meta
+        return []
 
-    if "date" in df.columns and not df["date"].empty:
-        meta["available_min_date"] = str(df["date"].min())
-        meta["available_max_date"] = str(df["date"].max())
+    work = df.copy()
 
-    if start_date:
-        df = df[df["date"] >= start_date].copy()
-    if end_date:
-        df = df[df["date"] <= end_date].copy()
+    if "date" not in work.columns:
+        return []
 
-    meta["row_count"] = int(len(df))
+    for col in ["bet_cost_yen", "return_yen", "profit_yen", "is_selected", "is_hit"]:
+        if col not in work.columns:
+            work[col] = 0
+
+    work["bet_cost_yen"] = pd.to_numeric(work["bet_cost_yen"], errors="coerce").fillna(0.0)
+    work["return_yen"] = pd.to_numeric(work["return_yen"], errors="coerce").fillna(0.0)
+    work["profit_yen"] = pd.to_numeric(work["profit_yen"], errors="coerce").fillna(0.0)
+    work["is_selected"] = pd.to_numeric(work["is_selected"], errors="coerce").fillna(0).astype(int)
+    work["is_hit"] = pd.to_numeric(work["is_hit"], errors="coerce").fillna(0).astype(int)
+
+    selected = work[work["is_selected"] == 1].copy()
+    if selected.empty:
+        return []
+
+    g = (
+        selected.groupby("date", as_index=False)
+        .agg(
+            buy_count=("is_selected", "sum"),
+            hit_count=("is_hit", "sum"),
+            total_bets=("bet_cost_yen", "sum"),
+            total_return=("return_yen", "sum"),
+            total_profit=("profit_yen", "sum"),
+        )
+        .sort_values("date")
+        .reset_index(drop=True)
+    )
+
+    g["roi"] = g.apply(
+        lambda r: float(r["total_return"] / r["total_bets"]) if r["total_bets"] > 0 else 0.0,
+        axis=1,
+    )
+    g["hit_rate"] = g.apply(
+        lambda r: float(r["hit_count"] / r["buy_count"]) if r["buy_count"] > 0 else 0.0,
+        axis=1,
+    )
+    g["cum_profit"] = g["total_profit"].cumsum()
+    g["cum_bets"] = g["total_bets"].cumsum()
+    g["cum_return"] = g["total_return"].cumsum()
+
+    rows: List[Dict[str, Any]] = []
+    for _, row in g.iterrows():
+        rows.append({
+            "date": str(row["date"]),
+            "buy_count": int(row["buy_count"]),
+            "hit_count": int(row["hit_count"]),
+            "total_bets": float(row["total_bets"]),
+            "total_return": float(row["total_return"]),
+            "total_profit": float(row["total_profit"]),
+            "roi": float(row["roi"]),
+            "hit_rate": float(row["hit_rate"]),
+            "cum_profit": float(row["cum_profit"]),
+            "cum_bets": float(row["cum_bets"]),
+            "cum_return": float(row["cum_return"]),
+        })
+
+    return rows
+
+
+def _build_venue_daily_timeseries(df: pd.DataFrame) -> Dict[str, List[Dict[str, Any]]]:
+    out: Dict[str, List[Dict[str, Any]]] = {}
+
+    if df.empty or "venue_norm" not in df.columns:
+        return out
+
+    for venue in VENUE_ORDER:
+        vdf = df[df["venue_norm"] == venue].copy()
+        out[venue] = _build_daily_timeseries(vdf)
+
+    return out
+
+
+def _build_venue_summary_cards(df: pd.DataFrame) -> List[Dict[str, Any]]:
     stats = _aggregate_stats_from_df(df)
-    return stats, meta
+    rows: List[Dict[str, Any]] = []
+
+    for venue in VENUE_ORDER:
+        s = stats.get(venue, {})
+        rows.append({
+            "venue": venue,
+            "race_count": int(s.get("race_count", 0) or 0),
+            "buy_count": int(s.get("buy_count", 0) or 0),
+            "hit_count": int(s.get("hit_count", 0) or 0),
+            "hit_rate": float(s.get("hit_rate", 0.0) or 0.0),
+            "avg_points": float(s.get("avg_points", 0.0) or 0.0),
+            "total_bets": float(s.get("total_bets", 0.0) or 0.0),
+            "total_return": float(s.get("total_return", 0.0) or 0.0),
+            "total_profit": float(s.get("total_profit", 0.0) or 0.0),
+            "roi": float(s.get("roi", 0.0) or 0.0),
+        })
+    return rows
 
 
 def _build_race_signal(
@@ -367,50 +443,6 @@ def _build_race_signal(
     }
 
 
-def _get_entries_and_beforeinfo(controller: RaceController, venue: str, date: str, race_no: int):
-    if venue == "戸田":
-        entries = controller.get_entries_toda_race(date, race_no)
-        entries = controller.enrich_entries_toda(entries, date=date, race_no=race_no)
-        beforeinfo = controller.get_beforeinfo_only_toda(race_no=race_no, date=date)
-
-    elif venue == "児島":
-        entries = controller.get_entries_kojima_race(date, race_no)
-        entries = controller.enrich_entries_kojima(entries, date=date, race_no=race_no)
-        beforeinfo = controller.get_beforeinfo_only_kojima(race_no=race_no, date=date)
-
-    elif venue == "住之江":
-        entries = controller.get_entries_suminoe_race(date, race_no)
-        entries = controller.enrich_entries_suminoe(entries, date=date, race_no=race_no)
-        beforeinfo = controller.get_beforeinfo_only_suminoe(race_no=race_no, date=date)
-
-    else:
-        entries = controller.get_entries_race(date, race_no)
-        entries = controller.enrich_entries_marugame(entries, date=date, race_no=race_no)
-        beforeinfo = controller.get_beforeinfo_only(race_no=race_no, date=date)
-
-    return [dict(e) for e in entries], beforeinfo
-
-
-def _get_full_bundle(controller: RaceController, venue: str, date: str, race_no: int):
-    if venue == "戸田":
-        grouped_odds = controller.get_odds_only_toda(race_no=race_no, date=date)
-        bundle = controller.get_ai_prediction_bundle_toda(date, race_no, top_n=20, with_odds=True)
-
-    elif venue == "児島":
-        grouped_odds = controller.get_odds_only_kojima(race_no=race_no, date=date)
-        bundle = controller.get_ai_prediction_bundle_kojima(date, race_no, top_n=20, with_odds=True)
-
-    elif venue == "住之江":
-        grouped_odds = controller.get_odds_only_suminoe(race_no=race_no, date=date)
-        bundle = controller.get_ai_prediction_bundle_suminoe(date, race_no, top_n=20, with_odds=True)
-
-    else:
-        grouped_odds = controller.get_odds_only(race_no=race_no, date=date)
-        bundle = controller.get_ai_prediction_bundle_marugame(date, race_no, top_n=20, with_odds=True)
-
-    return grouped_odds, (bundle or {})
-
-
 def _save_prediction_log(
     *,
     date: str,
@@ -419,6 +451,7 @@ def _save_prediction_log(
     best_bets: List[Dict[str, Any]],
     probabilities: Dict[str, float],
     grouped_odds: Dict[str, Any],
+    model_mode: str,
 ) -> None:
     try:
         prediction_rows = build_prediction_rows(
@@ -428,45 +461,71 @@ def _save_prediction_log(
             best_bets=best_bets,
             probabilities=probabilities,
             grouped_odds=grouped_odds,
-            model_name="binary_catboost_venue",
+            model_name=f"binary_catboost_{model_mode}",
         )
         save_prediction_rows(prediction_rows)
     except Exception as log_e:
         print("[WARN] prediction log save failed:", log_e)
 
 
-def _render(venue: str):
+def _render_venue_page(venue_name: str):
     if RaceController is None:
         return "RaceController import error", 500
+
+    venue_name = _normalize_venue_name(venue_name)
 
     date = request.args.get("date") or _today()
     race_str = request.args.get("race")
     mode = request.args.get("mode")
+    model_mode = _resolve_model_mode(request.args.get("model_mode"))
 
-    controller = RaceController()
+    controller = RaceController(model_mode=model_mode)
 
     if not race_str:
         return render_template(
             "index.html",
-            venue=venue,
+            venue=venue_name,
+            venue_key=VENUE_MASTER[venue_name]["venue_key"],
             date=date,
             races=_blank_races(),
             selected_race=0,
+            all_venues=VENUE_ORDER,
+            venue_config=VENUE_MASTER,
+            model_mode=model_mode,
         )
 
     race_no = int(race_str)
 
     try:
-        entries, beforeinfo = _get_entries_and_beforeinfo(controller, venue, date, race_no)
+        entries = controller.get_entries_race(venue_name, date, race_no)
+        entries = controller.enrich_entries(venue_name, entries, date=date, race_no=race_no)
+        entries = [dict(e) for e in entries]
+
+        try:
+            beforeinfo = controller.get_beforeinfo_only(venue_name, race_no=race_no, date=date)
+        except Exception:
+            beforeinfo = {}
 
         grouped_odds: Dict[str, Any] = {}
         best_bets: List[Dict[str, Any]] = []
         probabilities: Dict[str, float] = {}
         ev_result: Dict[str, float] = {}
         race_signal: Dict[str, Any] = {}
+        formation_options: List[Dict[str, Any]] = []
+        resolved_model_mode = model_mode
 
         if mode == "full":
-            grouped_odds, bundle = _get_full_bundle(controller, venue, date, race_no)
+            grouped_odds = controller.get_odds_only(venue_name, race_no=race_no, date=date)
+            bundle = controller.get_ai_prediction_bundle(
+                venue_name=venue_name,
+                date=date,
+                race_no=race_no,
+                top_n=20,
+                with_odds=True,
+                model_mode=model_mode,
+            ) or {}
+
+            resolved_model_mode = _resolve_model_mode(bundle.get("model_mode", model_mode))
 
             raw_prob_map = bundle.get("prob_map", {}) or {}
             probabilities = _complete_probabilities(raw_prob_map)
@@ -480,6 +539,7 @@ def _render(venue: str):
 
             ev_result = _build_ev_map_from_prob_and_odds(probabilities, odds_map)
             best_bets = bundle.get("best_bets", []) or []
+            formation_options = bundle.get("formation_options", []) or []
 
             race_signal = _build_race_signal(
                 probabilities=probabilities,
@@ -489,11 +549,12 @@ def _render(venue: str):
 
             _save_prediction_log(
                 date=date,
-                venue=venue,
+                venue=venue_name,
                 race_no=race_no,
                 best_bets=best_bets,
                 probabilities=probabilities,
                 grouped_odds=grouped_odds,
+                model_mode=resolved_model_mode,
             )
 
         races = _blank_races()
@@ -501,7 +562,8 @@ def _render(venue: str):
 
         return render_template(
             "index.html",
-            venue=venue,
+            venue=venue_name,
+            venue_key=VENUE_MASTER[venue_name]["venue_key"],
             date=date,
             races=races,
             selected_race=race_no,
@@ -510,25 +572,31 @@ def _render(venue: str):
             ev_result=ev_result,
             best_bets=best_bets,
             race_signal=race_signal,
+            formation_options=formation_options,
             beforeinfo=beforeinfo,
             before_info=beforeinfo,
             beforeinfo_data=beforeinfo,
             mode=mode,
+            all_venues=VENUE_ORDER,
+            venue_config=VENUE_MASTER,
+            model_mode=resolved_model_mode,
         )
 
     except Exception as e:
         print("\n" + "=" * 80)
-        print("[ERROR] _render failed")
+        print("[ERROR] _render_venue_page failed")
         print("=" * 80)
-        print("venue:", venue)
-        print("date :", date)
-        print("race :", race_no)
-        print("mode :", mode)
+        print("venue     :", venue_name)
+        print("date      :", date)
+        print("race      :", race_no)
+        print("mode      :", mode)
+        print("model_mode:", model_mode)
         traceback.print_exc()
 
         return render_template(
             "index.html",
-            venue=venue,
+            venue=venue_name,
+            venue_key=VENUE_MASTER[venue_name]["venue_key"],
             date=date,
             races=_blank_races(),
             selected_race=race_no,
@@ -537,9 +605,13 @@ def _render(venue: str):
             ev_result={},
             best_bets=[],
             race_signal={},
+            formation_options=[],
             beforeinfo={},
             error_message=str(e),
             mode=mode,
+            all_venues=VENUE_ORDER,
+            venue_config=VENUE_MASTER,
+            model_mode=model_mode,
         )
 
 
@@ -550,6 +622,8 @@ def home():
         "home.html",
         date=_today(),
         home_stats=home_stats,
+        all_venues=VENUE_ORDER,
+        venue_config=VENUE_MASTER,
     )
 
 
@@ -565,20 +639,49 @@ def sim_stats():
 
     start_arg = request.args.get("start", "").strip()
     end_arg = request.args.get("end", "").strip()
+    venue_arg = request.args.get("venue", "").strip()
 
     start_date = _html_date_to_ymd(start_arg) if start_arg else available_min
     end_date = _html_date_to_ymd(end_arg) if end_arg else available_max
 
-    stats, meta = _build_sim_stats(start_date=start_date, end_date=end_date)
+    filtered = df.copy()
+
+    if start_date:
+        filtered = filtered[filtered["date"] >= start_date].copy()
+    if end_date:
+        filtered = filtered[filtered["date"] <= end_date].copy()
+
+    if venue_arg and venue_arg in VENUE_ORDER:
+        filtered = filtered[filtered["venue_norm"] == venue_arg].copy()
+
+    stats = _aggregate_stats_from_df(filtered)
+
+    meta = {
+        "start_date": start_date,
+        "end_date": end_date,
+        "available_min_date": available_min,
+        "available_max_date": available_max,
+        "row_count": int(len(filtered)),
+        "selected_venue": venue_arg,
+    }
+
+    daily_all = _build_daily_timeseries(filtered)
+    venue_daily = _build_venue_daily_timeseries(filtered)
+    summary_cards = _build_venue_summary_cards(filtered)
 
     return render_template(
         "sim_stats.html",
         sim_stats=stats,
+        sim_summary_cards=summary_cards,
+        sim_daily_all=daily_all,
+        sim_daily_by_venue=venue_daily,
         start_date_html=_ymd_to_html_date(start_date),
         end_date_html=_ymd_to_html_date(end_date),
         available_min_html=_ymd_to_html_date(meta.get("available_min_date", "")),
         available_max_html=_ymd_to_html_date(meta.get("available_max_date", "")),
         sim_meta=meta,
+        selected_venue=venue_arg,
+        all_venues=VENUE_ORDER,
     )
 
 
@@ -591,24 +694,14 @@ def ping():
     })
 
 
-@app.route("/marugame")
-def marugame():
-    return _render("丸亀")
+@app.route("/venue/<venue_key>")
+def venue_page(venue_key: str):
+    try:
+        venue_name = get_venue_name_by_key(venue_key)
+    except Exception:
+        return f"Unknown venue_key: {venue_key}", 404
 
-
-@app.route("/toda")
-def toda():
-    return _render("戸田")
-
-
-@app.route("/kojima")
-def kojima():
-    return _render("児島")
-
-
-@app.route("/suminoe")
-def suminoe():
-    return _render("住之江")
+    return _render_venue_page(venue_name)
 
 
 if __name__ == "__main__":

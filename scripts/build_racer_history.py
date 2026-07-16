@@ -9,9 +9,10 @@ data/raw_txt の全K-fileをパースし、選手×レースのロング形式�
 学習用データセットの特徴量拡張(lane{n}_racer_no を実力指標に変換)のために使う。
 """
 
+import argparse
 import sys
 from pathlib import Path
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 import pandas as pd
 
@@ -23,6 +24,10 @@ from engine.txt_race_parser import parse_startk_multi_venue_txt  # noqa: E402
 
 RAW_TXT_DIR = PROJECT_ROOT / "data" / "raw_txt"
 OUT_CSV = PROJECT_ROOT / "data" / "datasets" / "racer_race_history.csv"
+
+# 差分更新用: 既存ファイルの最大日付からこの日数だけ遡って再パースする
+# (同じ日のファイルが後から修正されるケースへの保険)
+OVERLAP_DAYS = 3
 
 
 def _read_text_auto(path: Path) -> str:
@@ -43,10 +48,25 @@ def _extract_date_from_filename(filename: str) -> str:
     return f"{int(y):04d}{int(mo):02d}{int(d):02d}"
 
 
-def build_history() -> pd.DataFrame:
-    files = sorted(RAW_TXT_DIR.glob("*.TXT")) + sorted(RAW_TXT_DIR.glob("*.txt"))
-    files = sorted(set(files))
-    print(f"files found: {len(files)}")
+def _extract_date_from_k_filename(filename: str) -> str:
+    """K250101.TXT のような mbrace Kファイル名(K + YY + MM + DD)を厳密にパースする。
+    _extract_date_from_filename は4桁年を前提にしていて2桁年のこの命名規則には
+    使えない(誤った日付になり差分更新の対象選定を壊す)ため、専用の関数を用意する。
+    """
+    import re
+    m = re.match(r"K(\d{2})(\d{2})(\d{2})", filename)
+    if not m:
+        return ""
+    yy, mo, d = m.groups()
+    year = 2000 + int(yy)
+    return f"{year:04d}{int(mo):02d}{int(d):02d}"
+
+
+def build_history(files: Optional[List[Path]] = None) -> pd.DataFrame:
+    if files is None:
+        files = sorted(RAW_TXT_DIR.glob("*.TXT")) + sorted(RAW_TXT_DIR.glob("*.txt"))
+        files = sorted(set(files))
+    print(f"files to parse: {len(files)}")
 
     rows: List[Dict[str, Any]] = []
 
@@ -83,9 +103,47 @@ def build_history() -> pd.DataFrame:
     return df
 
 
+def _select_files_for_incremental_update() -> tuple[List[Path], Optional[pd.DataFrame]]:
+    """既存のOUT_CSVがあれば、その最大日付-OVERLAP_DAYS以降のファイルだけ選んで再パースする。"""
+    all_files = sorted(set(sorted(RAW_TXT_DIR.glob("*.TXT")) + sorted(RAW_TXT_DIR.glob("*.txt"))))
+
+    if not OUT_CSV.exists():
+        print("既存のracer_race_history.csvが無いため、全件パースします。")
+        return all_files, None
+
+    existing = pd.read_csv(OUT_CSV, low_memory=False)
+    existing["date"] = existing["date"].astype(str).str.zfill(8)
+    max_date = existing["date"].max()
+
+    from datetime import datetime, timedelta
+    try:
+        cutoff_dt = datetime.strptime(max_date, "%Y%m%d") - timedelta(days=OVERLAP_DAYS)
+        cutoff = cutoff_dt.strftime("%Y%m%d")
+    except Exception:
+        cutoff = "00000000"
+
+    # ファイル名から日付が抽出できない場合は安全側に倒して対象に含める
+    target_files = [
+        f for f in all_files
+        if (_extract_date_from_k_filename(f.name) or "99999999") >= cutoff
+    ]
+    print(f"既存データの最大日付: {max_date} / 差分パース対象: {len(target_files)}件 (cutoff={cutoff}, 全{len(all_files)}件中)")
+    return target_files, existing
+
+
 def main() -> None:
-    df = build_history()
-    print("total boat-race rows:", len(df))
+    parser = argparse.ArgumentParser()
+    parser.add_argument("--full", action="store_true", help="既存ファイルを無視して全raw_txtを再パースする")
+    args = parser.parse_args()
+
+    if args.full:
+        target_files = None
+        existing = None
+    else:
+        target_files, existing = _select_files_for_incremental_update()
+
+    df = build_history(files=target_files)
+    print("newly parsed boat-race rows:", len(df))
 
     df["date"] = df["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
     df = df[df["date"].str.match(r"^\d{8}$")].copy()
@@ -95,7 +153,12 @@ def main() -> None:
     df["st"] = pd.to_numeric(df["st"], errors="coerce")
 
     df = df[(df["racer_no"] > 0) & (df["race_no"].between(1, 12))].copy()
-    df = df.drop_duplicates(subset=["date", "venue", "race_no", "lane"]).copy()
+
+    if existing is not None and not existing.empty:
+        df = pd.concat([existing, df], ignore_index=True)
+
+    df["date"] = df["date"].astype(str).str.zfill(8)
+    df = df.drop_duplicates(subset=["date", "venue", "race_no", "lane"], keep="last").copy()
     df = df.sort_values(["date", "venue", "race_no", "lane"]).reset_index(drop=True)
 
     OUT_CSV.parent.mkdir(parents=True, exist_ok=True)

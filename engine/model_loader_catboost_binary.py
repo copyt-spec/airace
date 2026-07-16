@@ -6,38 +6,135 @@ import math
 from pathlib import Path
 from typing import Any, Dict, List
 
+import numpy as np
 import pandas as pd
+from engine.venue_registry import VENUE_ORDER, normalize_venue_name
+
+RACER_STATS_PATH = Path("data/datasets/racer_point_in_time_stats.csv")
+
+RACER_STATS_FEATURE_SUFFIXES = [
+    "races_prior", "win_rate_prior", "place_rate_prior",
+    "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
+]
 
 
 class BinaryCatBoostVenueModel:
-    def __init__(self, model_dir: str = "data/models", debug: bool = False) -> None:
+    def __init__(
+        self,
+        model_dir: str = "data/models",
+        debug: bool = False,
+        fallback_venue: str = "丸亀",
+        use_racer_stats: bool = True,
+    ) -> None:
         from catboost import CatBoostClassifier
 
         self.model_dir = Path(model_dir)
         self.debug = debug
+        self.fallback_venue = normalize_venue_name(fallback_venue)
         self.CatBoostClassifier = CatBoostClassifier
+        self.use_racer_stats = use_racer_stats
 
         self.models: Dict[str, Any] = {}
         self.metas: Dict[str, Dict[str, Any]] = {}
+        self.model_variant: Dict[str, str] = {}
 
-        # 既存3場だけロード
-        for venue in ["丸亀", "戸田", "児島"]:
-            model_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_no.cbm"
-            meta_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_no_meta.json"
-
-            if not model_path.exists():
-                raise FileNotFoundError(f"Missing model file: {model_path}")
-            if not meta_path.exists():
-                raise FileNotFoundError(f"Missing meta file: {meta_path}")
-
-            model = self.CatBoostClassifier()
-            model.load_model(str(model_path))
-
-            with open(meta_path, "r", encoding="utf-8") as f:
-                meta = json.load(f)
-
+        for venue in VENUE_ORDER:
+            model, meta, variant = self._load_venue_model(venue)
+            if model is None:
+                if self.debug:
+                    print(f"[SKIP_MODEL] venue={venue} model/meta missing")
+                continue
             self.models[venue] = model
             self.metas[venue] = meta
+            self.model_variant[venue] = variant
+
+        if self.fallback_venue not in self.models:
+            if not self.models:
+                raise FileNotFoundError("No venue model files found in model_dir.")
+            self.fallback_venue = list(self.models.keys())[0]
+
+        # 選手成績特徴量(2026-07-15追加の with_racer_stats モデル用)。
+        # racer_point_in_time_stats.csv は「その選手が実際にレースをした日」だけの
+        # 行しか持たないため、ライブ推論(未来の日付)では日付の完全一致では
+        # 引けない。ここでは選手ごとに「持っているデータの中で一番新しい行」を
+        # 現時点の推定値として使う(直近レース分だけ反映が遅れるが実用上十分な近似)。
+        # このファイルは定期的に再生成(build_racer_history.py →
+        # build_racer_point_in_time_stats.py)しないと古くなっていく点に注意。
+        self.racer_stats_latest: pd.DataFrame | None = None
+        self._racer_stats_mtime: float = 0.0
+        if self.use_racer_stats:
+            self._reload_racer_stats_if_changed()
+
+        if self.debug:
+            print("[LOADED_MODELS]", list(self.models.keys()))
+            print("[MODEL_VARIANT]", self.model_variant)
+            print("[FALLBACK_VENUE]", self.fallback_venue)
+            if self.racer_stats_latest is not None:
+                print("[RACER_STATS_LOADED]", len(self.racer_stats_latest), "racers")
+
+    def _load_venue_model(self, venue: str):
+        """with_racer_stats モデルを優先して読み込み、無ければ with_racer_no にフォールバックする。"""
+        if self.use_racer_stats:
+            model_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats.cbm"
+            meta_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats_meta.json"
+            if model_path.exists() and meta_path.exists():
+                model = self.CatBoostClassifier()
+                model.load_model(str(model_path))
+                with open(meta_path, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                return model, meta, "with_racer_stats"
+            if self.debug:
+                print(f"[FALLBACK_TO_RACER_NO] venue={venue} with_racer_stats model missing")
+
+        model_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_no.cbm"
+        meta_path = self.model_dir / f"trifecta_binary_catboost_{venue}_with_racer_no_meta.json"
+        if not model_path.exists() or not meta_path.exists():
+            return None, None, ""
+
+        model = self.CatBoostClassifier()
+        model.load_model(str(model_path))
+        with open(meta_path, "r", encoding="utf-8") as f:
+            meta = json.load(f)
+        return model, meta, "with_racer_no"
+
+    def _load_latest_racer_stats(self) -> pd.DataFrame:
+        if not RACER_STATS_PATH.exists():
+            if self.debug:
+                print(f"[WARN] racer stats file not found: {RACER_STATS_PATH}. with_racer_stats特徴量は0で埋められます。")
+            return pd.DataFrame()
+
+        stats = pd.read_csv(RACER_STATS_PATH, low_memory=False)
+        stats["date"] = stats["date"].astype(str).str.zfill(8)
+        stats["racer_no"] = pd.to_numeric(stats["racer_no"], errors="coerce").fillna(0).astype(int)
+
+        # 選手ごとに最新日付の行だけを残す(直近実績を「現時点の推定値」として使う)
+        stats = stats.sort_values(["racer_no", "date"])
+        latest = stats.groupby("racer_no", as_index=False).tail(1)
+        return latest.set_index("racer_no")
+
+    def _reload_racer_stats_if_changed(self) -> None:
+        """racer_point_in_time_stats.csvの更新時刻をチェックし、変わっていれば再読み込みする。
+
+        アプリを再起動しなくても、scripts/build_racer_history.py →
+        scripts/build_racer_point_in_time_stats.py を定期実行(スケジュール)で
+        更新するだけで反映されるようにするため。ファイルのstatのみの軽量チェックなので
+        predict_probaのたびに呼んでも問題ない。
+        """
+        try:
+            if not RACER_STATS_PATH.exists():
+                return
+            mtime = RACER_STATS_PATH.stat().st_mtime
+        except Exception:
+            return
+
+        if mtime == self._racer_stats_mtime and self.racer_stats_latest is not None:
+            return
+
+        if self.debug:
+            print(f"[RELOAD_RACER_STATS] mtime changed ({self._racer_stats_mtime} -> {mtime}), reloading")
+
+        self.racer_stats_latest = self._load_latest_racer_stats()
+        self._racer_stats_mtime = mtime
 
     def _safe_float(self, v: Any, default: float = 0.0) -> float:
         try:
@@ -48,28 +145,7 @@ class BinaryCatBoostVenueModel:
             return default
 
     def _normalize_venue_name(self, venue_name: str) -> str:
-        s = str(venue_name or "").strip()
-        if "丸亀" in s:
-            return "丸亀"
-        if "戸田" in s:
-            return "戸田"
-        if "児島" in s:
-            return "児島"
-        if "住之江" in s:
-            return "住之江"
-        return s
-
-    def _resolve_model_venue(self, venue_name: str) -> str:
-        """
-        実際に使うモデル会場名を返す。
-        住之江は暫定で戸田モデルを流用。
-        """
-        venue_name = self._normalize_venue_name(venue_name)
-
-        if venue_name == "住之江":
-            return "戸田"
-
-        return venue_name
+        return normalize_venue_name(venue_name)
 
     def _softmax(self, xs: List[float], temperature: float = 1.0) -> List[float]:
         if not xs:
@@ -89,16 +165,19 @@ class BinaryCatBoostVenueModel:
     def _get_temperature_by_venue(self, venue_name: str) -> float:
         venue_name = self._normalize_venue_name(venue_name)
 
-        if venue_name == "丸亀":
-            return 0.88
-        if venue_name == "戸田":
-            return 0.92
-        if venue_name == "児島":
-            return 0.90
-        if venue_name == "住之江":
-            # 戸田流用ベース。必要なら後で微調整。
-            return 0.91
-        return 0.90
+        temp_map = {
+            "丸亀": 0.88,
+            "戸田": 0.92,
+            "児島": 0.90,
+            "住之江": 0.90,
+        }
+        return float(temp_map.get(venue_name, 0.90))
+
+    def _resolve_model_venue(self, venue_name: str) -> str:
+        venue_name = self._normalize_venue_name(venue_name)
+        if venue_name in self.models:
+            return venue_name
+        return self.fallback_venue
 
     def _add_feature_block(self, df: pd.DataFrame) -> pd.DataFrame:
         out = df.copy()
@@ -198,6 +277,68 @@ class BinaryCatBoostVenueModel:
 
         return out
 
+    def _add_racer_stats_block_live(self, df: pd.DataFrame) -> pd.DataFrame:
+        out = df.copy()
+
+        if self.racer_stats_latest is None or self.racer_stats_latest.empty:
+            for lane in range(1, 7):
+                for suf in RACER_STATS_FEATURE_SUFFIXES:
+                    out[f"lane{lane}_{suf}"] = np.nan
+        else:
+            for lane in range(1, 7):
+                racer_col = f"lane{lane}_racer_no"
+                course_col = f"lane{lane}_course"
+
+                racer_nos = pd.to_numeric(out.get(racer_col, 0), errors="coerce").fillna(0).astype(int)
+                joined = racer_nos.map(
+                    lambda rno: self.racer_stats_latest.loc[rno] if rno in self.racer_stats_latest.index else None
+                )
+
+                out[f"lane{lane}_races_prior"] = [
+                    (r["races_prior"] if r is not None else np.nan) for r in joined
+                ]
+                out[f"lane{lane}_win_rate_prior"] = [
+                    (r["win_rate_prior"] if r is not None else np.nan) for r in joined
+                ]
+                out[f"lane{lane}_place_rate_prior"] = [
+                    (r["place_rate_prior"] if r is not None else np.nan) for r in joined
+                ]
+                out[f"lane{lane}_avg_st_prior"] = [
+                    (r["avg_st_prior"] if r is not None else np.nan) for r in joined
+                ]
+
+                course_vals = pd.to_numeric(out.get(course_col, 0), errors="coerce").fillna(0).astype(int)
+                place_rate_by_course = []
+                avg_st_by_course = []
+                for r, c in zip(joined, course_vals):
+                    if r is None:
+                        place_rate_by_course.append(np.nan)
+                        avg_st_by_course.append(np.nan)
+                        continue
+                    c = int(c) if 1 <= int(c) <= 6 else 0
+                    if c == 0:
+                        place_rate_by_course.append(np.nan)
+                        avg_st_by_course.append(np.nan)
+                    else:
+                        place_rate_by_course.append(r.get(f"course{c}_place_rate_prior", np.nan))
+                        avg_st_by_course.append(r.get(f"course{c}_avg_st_prior", np.nan))
+
+                out[f"lane{lane}_course_place_rate_prior"] = place_rate_by_course
+                out[f"lane{lane}_course_avg_st_prior"] = avg_st_by_course
+
+        for pos, pos_name in [
+            ("first", "combo_first_lane"),
+            ("second", "combo_second_lane"),
+            ("third", "combo_third_lane"),
+        ]:
+            for suf in RACER_STATS_FEATURE_SUFFIXES:
+                out[f"{pos}_{suf}"] = np.nan
+                for lane in range(1, 7):
+                    mask = out[pos_name] == lane
+                    out.loc[mask, f"{pos}_{suf}"] = out.loc[mask, f"lane{lane}_{suf}"]
+
+        return out
+
     def _prepare_x(self, df: pd.DataFrame, feature_cols: List[str]) -> pd.DataFrame:
         x = df.copy()
 
@@ -216,40 +357,39 @@ class BinaryCatBoostVenueModel:
         return x
 
     def predict_proba(self, df120: pd.DataFrame, venue_name: str) -> Dict[str, float]:
-        original_venue_name = self._normalize_venue_name(venue_name)
-        model_venue_name = self._resolve_model_venue(original_venue_name)
-
-        if model_venue_name not in self.models:
-            raise ValueError(f"Unsupported venue: {original_venue_name} (resolved={model_venue_name})")
-
-        model = self.models[model_venue_name]
-        meta = self.metas[model_venue_name]
-        feature_cols = list(meta.get("feature_cols", []))
-
         if "combo" not in df120.columns:
             raise ValueError("df120 must have combo column")
 
+        requested_venue = self._normalize_venue_name(venue_name)
+        model_venue = self._resolve_model_venue(requested_venue)
+
+        model = self.models[model_venue]
+        meta = self.metas[model_venue]
+        feature_cols = list(meta.get("feature_cols", []))
+        variant = self.model_variant.get(model_venue, "")
+
         work = self._add_feature_block(df120.copy())
+        if variant == "with_racer_stats":
+            if self.use_racer_stats:
+                self._reload_racer_stats_if_changed()
+            work = self._add_racer_stats_block_live(work)
         x = self._prepare_x(work, feature_cols)
 
         raw_scores = model.predict(x, prediction_type="RawFormulaVal")
         raw_scores = [self._safe_float(v, 0.0) for v in raw_scores]
 
-        # 温度は表示会場ベースで調整
-        temperature = self._get_temperature_by_venue(original_venue_name)
+        temperature = self._get_temperature_by_venue(requested_venue)
         probs = self._softmax(raw_scores, temperature=temperature)
 
         combos = df120["combo"].astype(str).tolist()
         prob_map = {combo: float(p) for combo, p in zip(combos, probs)}
 
         if self.debug:
-            top10 = sorted(prob_map.items(), key=lambda kv: kv[1], reverse=True)[:10]
             print(
-                f"[DEBUG] venue={original_venue_name} "
-                f"resolved_model={model_venue_name} "
-                f"temp={temperature}"
+                "[PREDICT]",
+                f"requested={requested_venue}",
+                f"model={model_venue}",
+                f"rows={len(df120)}",
             )
-            for k, v in top10:
-                print("  ", k, round(v, 6))
 
         return prob_map

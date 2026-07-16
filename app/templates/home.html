@@ -5,6 +5,14 @@
 <meta name="viewport" content="width=device-width, initial-scale=1"/>
 <title>BoatRace AI - Home</title>
 
+<!-- PWA(ホーム画面追加)対応: 2026-07-17追加 -->
+<link rel="manifest" href="{{ url_for('static', filename='manifest.json') }}">
+<meta name="theme-color" content="#0b1020">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="apple-mobile-web-app-title" content="Boat AI">
+<link rel="apple-touch-icon" href="{{ url_for('static', filename='img/icon-180.png') }}">
+
 <style>
 :root{
   --bg1:#071021;
@@ -21,6 +29,14 @@
   --errbg: rgba(255,120,160,0.14);
   --errbd: rgba(255,120,160,0.28);
   --cardbg: rgba(255,255,255,0.05);
+
+  --blue1:#40b3ff;
+  --blue2:#78d7ff;
+  --pink1:#ff78c8;
+  --orange1:#ffb978;
+  --green1:#78ffb0;
+  --violet1:#9b8cff;
+  --ink:#071021;
 }
 
 *{box-sizing:border-box;}
@@ -123,26 +139,57 @@ input[type="date"]{
   font-weight:700;
 }
 
+.venue-buttons{
+  display:flex;
+  flex-wrap:wrap;
+  gap:12px;
+}
+
 .btn{
-  padding:12px 18px;
+  position:relative;
+  padding:13px 20px;
   border:none;
-  border-radius:16px;
+  border-radius:18px;
   font-weight:900;
   cursor:pointer;
-  transition:.1s;
+  transition:transform .15s ease, filter .15s ease, box-shadow .15s ease;
+  overflow:hidden;
+}
+
+.btn::before{
+  content:"";
+  position:absolute;
+  inset:0;
+  background:linear-gradient(
+    120deg,
+    rgba(255,255,255,0.22),
+    transparent 45%,
+    transparent 55%,
+    rgba(255,255,255,0.12)
+  );
+  opacity:.7;
+  pointer-events:none;
+}
+
+.btn:hover{
+  filter:brightness(1.06);
+  transform:translateY(-2px);
 }
 
 .btn-primary{
-  background:linear-gradient(135deg,#40b3ff,#78ffb0);
-  color:#071021;
+  background:linear-gradient(135deg,var(--blue1),var(--green1));
+  color:var(--ink);
+  box-shadow:0 12px 28px rgba(64,179,255,0.26);
 }
 .btn-secondary{
-  background:linear-gradient(135deg,#ff78c8,#ffb978);
-  color:#071021;
+  background:linear-gradient(135deg,var(--pink1),var(--orange1));
+  color:var(--ink);
+  box-shadow:0 12px 28px rgba(255,120,200,0.24);
 }
 .btn-tertiary{
-  background:linear-gradient(135deg,#9b8cff,#78d7ff);
-  color:#071021;
+  background:linear-gradient(135deg,var(--violet1),var(--blue2));
+  color:var(--ink);
+  box-shadow:0 12px 28px rgba(155,140,255,0.24);
 }
 .btn-ghost{
   background:rgba(255,255,255,0.08);
@@ -151,10 +198,42 @@ input[type="date"]{
 }
 .btn-dark{
   background:linear-gradient(135deg,#d9d9d9,#8cc8ff);
-  color:#071021;
+  color:var(--ink);
+  box-shadow:0 12px 28px rgba(140,200,255,0.22);
+}
+.btn-neutral{
+  background:linear-gradient(135deg,rgba(255,255,255,0.16),rgba(255,255,255,0.08));
+  color:var(--text);
+  border:1px solid rgba(255,255,255,0.16);
+  box-shadow:0 12px 28px rgba(0,0,0,0.16);
 }
 
-.btn:hover{filter:brightness(1.1);}
+.venue-btn-marugame{
+  background:linear-gradient(135deg,#40b3ff,#78ffb0);
+  color:var(--ink);
+  box-shadow:0 14px 30px rgba(64,179,255,0.28);
+}
+.venue-btn-toda{
+  background:linear-gradient(135deg,#ff78c8,#ffb978);
+  color:var(--ink);
+  box-shadow:0 14px 30px rgba(255,120,200,0.26);
+}
+.venue-btn-kojima{
+  background:linear-gradient(135deg,#9b8cff,#78d7ff);
+  color:var(--ink);
+  box-shadow:0 14px 30px rgba(155,140,255,0.26);
+}
+.venue-btn-suminoe{
+  background:linear-gradient(135deg,#d9d9d9,#8cc8ff);
+  color:var(--ink);
+  box-shadow:0 14px 30px rgba(140,200,255,0.24);
+}
+.venue-btn-other{
+  background:linear-gradient(135deg,rgba(255,255,255,0.18),rgba(255,255,255,0.08));
+  color:var(--text);
+  border:1px solid rgba(255,255,255,0.16);
+  box-shadow:0 14px 30px rgba(0,0,0,0.18);
+}
 
 .hero-right{
   display:flex;
@@ -376,10 +455,22 @@ input[type="date"]{
           <input id="dateInput" type="date">
         </div>
 
-        <button class="btn btn-primary" id="goMarugame">丸亀へ</button>
-        <button class="btn btn-secondary" id="goToda">戸田へ</button>
-        <button class="btn btn-tertiary" id="goKojima">児島へ</button>
-        <button class="btn btn-dark" id="goSuminoe">住之江へ</button>
+        <div class="venue-buttons">
+          {% for venue_name in all_venues %}
+            {% set vkey = venue_config[venue_name]["venue_key"] %}
+            {% if loop.index == 1 %}
+              <button class="btn venue-btn-marugame venue-jump" data-venue-key="{{ vkey }}">{{ venue_name }}</button>
+            {% elif loop.index == 2 %}
+              <button class="btn venue-btn-toda venue-jump" data-venue-key="{{ vkey }}">{{ venue_name }}</button>
+            {% elif loop.index == 3 %}
+              <button class="btn venue-btn-kojima venue-jump" data-venue-key="{{ vkey }}">{{ venue_name }}</button>
+            {% elif loop.index == 4 %}
+              <button class="btn venue-btn-suminoe venue-jump" data-venue-key="{{ vkey }}">{{ venue_name }}</button>
+            {% else %}
+              <button class="btn venue-btn-other venue-jump" data-venue-key="{{ vkey }}">{{ venue_name }}</button>
+            {% endif %}
+          {% endfor %}
+        </div>
       </div>
 
       <div class="keep-card">
@@ -420,7 +511,7 @@ input[type="date"]{
   </section>
 
   <section class="stats-section">
-    {% for venue_name in ["丸亀", "戸田", "児島", "住之江"] %}
+    {% for venue_name in all_venues %}
       {% set s = home_stats.get(venue_name, {}) if home_stats else {} %}
       <div class="stat-card">
         <h3 class="stat-title">{{ venue_name }} リザルト</h3>
@@ -483,18 +574,12 @@ function toYmdCompact(v){return v.replaceAll("-","");}
 const input=document.getElementById("dateInput");
 input.value=formatYmd(new Date());
 
-document.getElementById("goMarugame").onclick=()=>{
-  window.location.href="/marugame?date="+toYmdCompact(input.value);
-};
-document.getElementById("goToda").onclick=()=>{
-  window.location.href="/toda?date="+toYmdCompact(input.value);
-};
-document.getElementById("goKojima").onclick=()=>{
-  window.location.href="/kojima?date="+toYmdCompact(input.value);
-};
-document.getElementById("goSuminoe").onclick=()=>{
-  window.location.href="/suminoe?date="+toYmdCompact(input.value);
-};
+document.querySelectorAll(".venue-jump").forEach(btn=>{
+  btn.addEventListener("click", ()=>{
+    const venueKey = btn.dataset.venueKey;
+    window.location.href="/venue/" + venueKey + "?date=" + toYmdCompact(input.value);
+  });
+});
 
 let keepAliveTimer = null;
 let stopTimer = null;

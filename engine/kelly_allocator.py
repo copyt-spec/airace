@@ -193,3 +193,69 @@ def kelly_allocate_exclusive(
     # 金額が0になったせいで総額が減るので、見た目を整えるために amount順で返す
     picks.sort(key=lambda x: x.amount, reverse=True)
     return picks
+
+
+def kelly_size_selected_bets(
+    selected: List[Dict[str, Any]],
+    bankroll: int,
+    *,
+    fractional: float = 0.25,
+    cap_total: float = 0.05,
+    cap_per: float = 0.02,
+    min_bet_yen: int = 100,
+) -> List[Dict[str, Any]]:
+    """
+    engine.buy_selector.select_best_bets() が既に選んだ買い目(combo/prob/odds)
+    に対して、賭け金だけをケリー基準で決める。
+
+    kelly_allocate_exclusive() との違い:
+    - あちらは prob_map 全体(120通り)を渡して「どれを買うか」から
+      最適化する多点ケリー。ここでは選定自体はやり直さず(venue別に
+      チューニング済みのbuy_selectorのロジックをそのまま尊重する)、
+      「既に選ばれた点それぞれに、単点ケリー公式 f*=(p*o-1)/(o-1) で
+      エッジに応じた比率を割り当てる」だけの単純な処理。
+    - 単点ケリーを個別に計算したあと、合計がcap_totalを超えていれば
+      比例縮小するだけなので、prob_mapを選択候補だけに絞って再正規化
+      する(=確率の合計が不当に1に近づいてしまう)ような誤りを避けている。
+
+    2026-07-16: ROI%そのものを上げる施策ではなく、「同じ選択」でも
+    賭け金をエッジの大きさに応じて傾斜配分することで、資産(バンクロール)
+    の成長効率を上げることを狙ったもの。[[boat_ai-roi-findings]]参照。
+
+    戻り値: selected の各dictに "kelly_frac"(bankroll比率)と
+    "bet_amount_yen"(円、100円単位に丸め)を追加したコピーのリスト。
+    エッジが無い(p*o<=1)候補は bet_amount_yen=0 になる。
+    """
+    if bankroll <= 0 or not selected:
+        return [dict(r, kelly_frac=0.0, bet_amount_yen=0) for r in (selected or [])]
+
+    fractional = max(0.0, min(1.0, float(fractional)))
+
+    raw_fracs: List[float] = []
+    for r in selected:
+        p = _finite_pos(r.get("prob", r.get("score", 0.0)), 0.0)
+        o = _finite_pos(r.get("odds_raw", r.get("odds", 0.0)), 0.0)
+
+        if p <= 0 or o <= 1.0:
+            raw_fracs.append(0.0)
+            continue
+
+        f_single = (p * o - 1.0) / (o - 1.0)
+        f_single = max(0.0, f_single) * fractional
+        f_single = min(f_single, float(cap_per))
+        raw_fracs.append(f_single)
+
+    total = sum(raw_fracs)
+    if total > float(cap_total) and total > 0:
+        scale = float(cap_total) / total
+        raw_fracs = [f * scale for f in raw_fracs]
+
+    out: List[Dict[str, Any]] = []
+    for r, f in zip(selected, raw_fracs):
+        amt = int((bankroll * f) // min_bet_yen) * min_bet_yen
+        row = dict(r)
+        row["kelly_frac"] = float(f)
+        row["bet_amount_yen"] = int(amt)
+        out.append(row)
+
+    return out

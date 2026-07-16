@@ -73,13 +73,31 @@ def _load_venue_dataset(venue: str) -> pd.DataFrame:
     return pd.concat(chunks, ignore_index=True)
 
 
-def generate_for_venue(venue: str, temperature: float, min_races: int = 5) -> None:
+def generate_for_venue(
+    venue: str,
+    temperature: float,
+    min_races: int = 5,
+    model_suffix: str = "",
+    valid_dates: set | None = None,
+    out_suffix: str = "",
+) -> None:
+    """
+    model_suffix: 通常は""(本番の_with_racer_statsモデル)。
+      2026-07-16追加: engine.kelly_allocator...ではなく、選手勝率などの
+      特徴量重みを変えた実験モデル(例: "_w4x")を評価したい場合に指定する
+      (scripts/sweep_racer_stats_weight.py から使う)。
+    valid_dates: 指定した場合、その日付集合に含まれるレースだけを対象にする
+      (=学習時のvalidation splitと同じ日付集合に絞ることで、真のholdoutでの
+      公正な比較にする)。Noneなら従来通りpredictions.csvにある全レースが対象。
+    out_suffix: 出力ファイル名に追加するサフィックス(重み実験の結果を
+      本番用の比較ファイルと混同しないようにするため)。
+    """
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
-    print("GENERATE PREDICTIONS:", venue)
+    print("GENERATE PREDICTIONS:", venue, f"(model_suffix={model_suffix!r})" if model_suffix else "")
     print("=" * 80)
 
-    model_path = MODEL_DIR / f"trifecta_binary_catboost_{venue}_with_racer_stats.cbm"
+    model_path = MODEL_DIR / f"trifecta_binary_catboost_{venue}_with_racer_stats{model_suffix}.cbm"
     if not model_path.exists():
         print(f"[SKIP] model not found: {model_path}")
         return
@@ -95,6 +113,11 @@ def generate_for_venue(venue: str, temperature: float, min_races: int = 5) -> No
 
     target_pred = pred[pred["venue"] == venue].copy()
     target_races = target_pred[["date", "race_no"]].drop_duplicates()
+
+    if valid_dates is not None:
+        target_races = target_races[target_races["date"].isin(valid_dates)].copy()
+        target_pred = target_pred.merge(target_races, on=["date", "race_no"], how="inner")
+
     print("target races (real odds available):", len(target_races))
 
     if len(target_races) < min_races:
@@ -140,7 +163,7 @@ def generate_for_venue(venue: str, temperature: float, min_races: int = 5) -> No
     )
     out_df = out_df.merge(odds_lookup, on=["date", "race_no", "combo"], how="left")
 
-    out_path = PROJECT_ROOT / "data" / "logs" / f"predictions_with_racer_stats_{venue}.csv"
+    out_path = PROJECT_ROOT / "data" / "logs" / f"predictions_with_racer_stats_{venue}{out_suffix}.csv"
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 
     print("saved:", out_path)
