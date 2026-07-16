@@ -125,6 +125,13 @@ data/models/*
 
 !data/models/venue_buy_config.optimized.json
 
+# ▼ global_auto模式(2026-07-17): このモデルファイルがgit管理外だったせいで
+# RaceController()のコンストラクタが本番(Render)で毎回FileNotFoundErrorに
+# なり、会場ページに入るだけでサーバーエラーになっていた。許可リストに追加。
+!data/models/trifecta_binary_catboost_global_venue_auto.cbm
+!data/models/trifecta_binary_catboost_global_venue_auto_meta.json
+!data/models/trifecta_binary_catboost_global_venue_auto_venue_stats.csv
+
 # =========================
 # キャッシュ
 # =========================

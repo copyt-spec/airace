@@ -57,11 +57,25 @@ class RaceController:
             fallback_venue="丸亀",
         )
 
-        self.global_auto_model = GlobalVenueAutoCatBoostModel(
-            model_dir="data/models",
-            model_name="trifecta_binary_catboost_global_venue_auto",
-            debug=debug,
-        )
+        # 2026-07-17修正: global_auto用のモデルファイル3点(.cbm/meta.json/
+        # venue_stats.csv)がgit管理外だった環境(Renderなど)では
+        # GlobalVenueAutoCatBoostModel()がFileNotFoundErrorを送出し、
+        # RaceController()のコンストラクタ自体が失敗して「会場ページに入ると
+        # 必ずサーバーエラー」になっていた(model_mode="venue"がデフォルトで、
+        # global_auto側を一切使わない場合でも、コンストラクタで無条件に
+        # 読み込もうとしていたため)。ここで失敗を握りつぶしてNoneにし、
+        # 実際にglobal_autoモードが選ばれた時だけ_get_active_modelでエラーに
+        # なるようにする(venueモードの利用には影響しない)。
+        try:
+            self.global_auto_model = GlobalVenueAutoCatBoostModel(
+                model_dir="data/models",
+                model_name="trifecta_binary_catboost_global_venue_auto",
+                debug=debug,
+            )
+        except Exception as e:
+            if self.debug:
+                print(f"[WARN] global_auto_model load failed (falling back to venue model only): {e}")
+            self.global_auto_model = None
 
     # =========================
     # model mode
@@ -80,8 +94,10 @@ class RaceController:
 
     def _get_active_model(self, model_mode: str | None = None):
         mode = self._resolve_model_mode(model_mode or self.model_mode)
-        if mode == "global_auto":
+        if mode == "global_auto" and self.global_auto_model is not None:
             return self.global_auto_model, "global_auto"
+        # global_autoが選ばれたがモデル未配置(ファイル欠損)の場合は、
+        # サーバーエラーにせずvenueモデルにフォールバックする。
         return self.venue_model, "venue"
 
     # =========================
