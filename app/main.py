@@ -229,11 +229,13 @@ def _load_sim_light_df() -> pd.DataFrame:
         else:
             df[col] = 0
 
-    for col in ["bet_cost_yen", "return_yen", "profit_yen"]:
+    for col in ["bet_cost_yen", "return_yen", "profit_yen", "prob", "odds", "top1_prob", "prob_gap"]:
         if col in df.columns:
             df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
-        else:
-            df[col] = 0.0
+
+    for col in ["odds_band", "conf_tier", "combo"]:
+        if col not in df.columns:
+            df[col] = ""
 
     return df
 
@@ -381,6 +383,103 @@ def _build_venue_summary_cards(df: pd.DataFrame) -> List[Dict[str, Any]]:
             "roi": float(s.get("roi", 0.0) or 0.0),
         })
     return rows
+
+
+CONF_TIER_ORDER = ["A", "B", "C", "D"]
+CONF_TIER_LABEL = {
+    "A": "A(近似・勝負レース相当)",
+    "B": "B(近似・狙い目相当)",
+    "C": "C(近似・様子見相当)",
+    "D": "D(近似・見送り寄り相当)",
+}
+
+ODDS_BAND_ORDER = ["〜10倍", "10〜30倍", "30〜50倍", "50〜100倍", "100倍〜"]
+
+
+def _breakdown_by_key(df: pd.DataFrame, key: str, order: List[str], label_map: Dict[str, str] | None = None) -> List[Dict[str, Any]]:
+    rows: List[Dict[str, Any]] = []
+    if df.empty or key not in df.columns:
+        return rows
+
+    work = df.copy()
+    for col in ["bet_cost_yen", "return_yen", "profit_yen", "is_hit"]:
+        if col not in work.columns:
+            work[col] = 0
+
+    present = [v for v in order if v in set(work[key].astype(str))]
+    for v in present:
+        sub = work[work[key].astype(str) == v]
+        buy_count = int(len(sub))
+        hit_count = int((sub["is_hit"] == 1).sum())
+        total_bets = float(sub["bet_cost_yen"].sum())
+        total_return = float(sub["return_yen"].sum())
+        total_profit = total_return - total_bets
+        hit_rate = hit_count / buy_count if buy_count > 0 else 0.0
+        roi = total_return / total_bets if total_bets > 0 else 0.0
+        rows.append({
+            "key": v,
+            "label": (label_map or {}).get(v, v),
+            "buy_count": buy_count,
+            "hit_count": hit_count,
+            "hit_rate": hit_rate,
+            "total_bets": total_bets,
+            "total_return": total_return,
+            "total_profit": total_profit,
+            "roi": roi,
+        })
+    return rows
+
+
+def _build_conf_tier_breakdown(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    return _breakdown_by_key(df, "conf_tier", CONF_TIER_ORDER, CONF_TIER_LABEL)
+
+
+def _build_odds_band_breakdown(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    return _breakdown_by_key(df, "odds_band", ODDS_BAND_ORDER)
+
+
+KELLY_BANKROLL_DAILY_CSV = LOG_DIR / "kelly_bankroll_daily.csv"
+
+
+def _load_kelly_bankroll_daily(start_date: str = "", end_date: str = "") -> Dict[str, Any]:
+    if not KELLY_BANKROLL_DAILY_CSV.exists():
+        return {"rows": [], "available": False}
+
+    try:
+        df = pd.read_csv(KELLY_BANKROLL_DAILY_CSV, low_memory=False)
+    except Exception as e:
+        print("[WARN] failed to read kelly bankroll daily csv:", e)
+        return {"rows": [], "available": False}
+
+    if df.empty:
+        return {"rows": [], "available": False}
+
+    df["date"] = df["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
+    df = df.sort_values("date").reset_index(drop=True)
+
+    if start_date:
+        df = df[df["date"] >= start_date]
+    if end_date:
+        df = df[df["date"] <= end_date]
+
+    if df.empty:
+        return {"rows": [], "available": False}
+
+    rows: List[Dict[str, Any]] = []
+    for _, r in df.iterrows():
+        rows.append({
+            "date": str(r["date"]),
+            "flat_bankroll": float(r.get("flat_bankroll", 0.0) or 0.0),
+            "kelly_bankroll": float(r.get("kelly_bankroll", 0.0) or 0.0),
+        })
+
+    return {
+        "rows": rows,
+        "available": True,
+        "initial_bankroll": 100000,
+        "final_flat_bankroll": rows[-1]["flat_bankroll"] if rows else 0.0,
+        "final_kelly_bankroll": rows[-1]["kelly_bankroll"] if rows else 0.0,
+    }
 
 
 def _build_race_signal(
@@ -668,6 +767,9 @@ def sim_stats():
     daily_all = _build_daily_timeseries(filtered)
     venue_daily = _build_venue_daily_timeseries(filtered)
     summary_cards = _build_venue_summary_cards(filtered)
+    conf_tier_breakdown = _build_conf_tier_breakdown(filtered)
+    odds_band_breakdown = _build_odds_band_breakdown(filtered)
+    kelly_bankroll = _load_kelly_bankroll_daily(start_date, end_date)
 
     return render_template(
         "sim_stats.html",
@@ -675,6 +777,9 @@ def sim_stats():
         sim_summary_cards=summary_cards,
         sim_daily_all=daily_all,
         sim_daily_by_venue=venue_daily,
+        conf_tier_breakdown=conf_tier_breakdown,
+        odds_band_breakdown=odds_band_breakdown,
+        kelly_bankroll=kelly_bankroll,
         start_date_html=_ymd_to_html_date(start_date),
         end_date_html=_ymd_to_html_date(end_date),
         available_min_html=_ymd_to_html_date(meta.get("available_min_date", "")),

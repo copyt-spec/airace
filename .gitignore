@@ -53,6 +53,8 @@ data/logs/analysis/
 # ▼ Render用に必要な軽量ファイルだけ許可
 !data/logs/home_stats_1y.json
 !data/logs/prediction_results_sim_1y_light.csv
+# 2026-07-18追加: /sim画面のKelly資産推移チャート用(軽量、日次集計済み)
+!data/logs/kelly_bankroll_daily.csv
 
 # =========================
 # モデル

@@ -1,10 +1,10 @@
 <!DOCTYPE html>
 <html lang="ja">
 <head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1"/>
-<title>BoatRace AI - Simulation Stats</title>
-
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BoatRace AI | シミュレーション分析</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
 <style>
 :root{
   --bg1:#071021;
@@ -14,12 +14,8 @@
   --muted: rgba(255,255,255,0.70);
   --shadow: 0 30px 90px rgba(0,0,0,0.55);
   --radius: 22px;
-  --good: rgba(120,255,176,0.14);
-  --goodbd: rgba(120,255,176,0.28);
-  --warn: rgba(255,190,120,0.14);
-  --warnbd: rgba(255,190,120,0.28);
-  --bad: rgba(255,120,160,0.14);
-  --badbd: rgba(255,120,160,0.28);
+  --cardbg: rgba(255,255,255,0.05);
+  --line: rgba(255,255,255,0.10);
 }
 
 *{box-sizing:border-box;}
@@ -36,9 +32,9 @@ body{
 }
 
 .wrap{
-  width:min(1200px,94vw);
+  width:min(1400px,95vw);
   margin:0 auto;
-  padding:30px 0 80px;
+  padding:28px 0 60px;
 }
 
 .topbar{
@@ -66,66 +62,46 @@ body{
 
 .brand h1{
   margin:0;
-  font-size:18px;
+  font-size:20px;
   font-weight:900;
 }
 .brand small{
   display:block;
   font-size:12px;
   color:var(--muted);
+  margin-top:4px;
 }
 
-.nav{
-  display:flex;
-  gap:10px;
-  flex-wrap:wrap;
-}
-
-.nav a{
-  text-decoration:none;
-  color:var(--text);
+.pill{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
   padding:10px 14px;
-  border-radius:14px;
+  border-radius:999px;
   border:1px solid var(--border);
-  background:rgba(255,255,255,0.05);
+  background:rgba(255,255,255,0.06);
+  color:var(--text);
+  text-decoration:none;
+  font-size:13px;
+  font-weight:800;
+}
+.pill:hover{
+  background:rgba(255,255,255,0.10);
 }
 
 .card{
-  border:1px solid var(--border);
-  background:rgba(255,255,255,0.05);
   border-radius:var(--radius);
+  border:1px solid var(--border);
+  background:var(--cardbg);
   box-shadow:var(--shadow);
+  padding:18px;
 }
 
-.hero{
-  padding:26px;
+.filter-card{
   margin-bottom:20px;
 }
 
-.hero h2{
-  margin:0 0 10px;
-  font-size:28px;
-  font-weight:900;
-}
-
-.hero p{
-  margin:0;
-  color:var(--muted);
-  line-height:1.7;
-}
-
-.filter-box{
-  padding:22px;
-  margin-bottom:20px;
-}
-
-.filter-title{
-  margin:0 0 14px;
-  font-size:18px;
-  font-weight:900;
-}
-
-.form-row{
+.filter-row{
   display:flex;
   flex-wrap:wrap;
   gap:14px;
@@ -144,7 +120,7 @@ body{
   font-weight:700;
 }
 
-input[type="date"]{
+input[type="date"], select{
   padding:10px 14px;
   border-radius:14px;
   border:1px solid var(--border);
@@ -153,86 +129,139 @@ input[type="date"]{
   font-weight:700;
 }
 
-.btn{
+button{
   padding:12px 18px;
   border:none;
   border-radius:16px;
   font-weight:900;
   cursor:pointer;
-  transition:.1s;
   background:linear-gradient(135deg,#40b3ff,#78ffb0);
   color:#071021;
 }
 
 .meta{
-  margin-top:14px;
+  margin-top:10px;
   color:var(--muted);
   font-size:12px;
-  line-height:1.7;
+  line-height:1.8;
 }
 
-.grid{
+.summary-grid{
   display:grid;
-  grid-template-columns:repeat(3, 1fr);
-  gap:18px;
+  grid-template-columns:repeat(4,1fr);
+  gap:16px;
+  margin-bottom:22px;
 }
 
-@media (max-width: 980px){
-  .grid{
-    grid-template-columns:1fr;
-  }
+.summary-card{
+  border-radius:20px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  box-shadow:var(--shadow);
+  padding:18px;
 }
 
-.stat-card{
-  padding:20px;
-}
-
-.stat-card h3{
-  margin:0 0 16px;
-  font-size:20px;
+.summary-title{
+  margin:0 0 10px;
+  font-size:16px;
   font-weight:900;
 }
 
-.stat-card.good{
-  background:var(--good);
-  border-color:var(--goodbd);
-}
-.stat-card.warn{
-  background:var(--warn);
-  border-color:var(--warnbd);
-}
-.stat-card.bad{
-  background:var(--bad);
-  border-color:var(--badbd);
-}
-
-.kv{
+.stat-grid{
   display:grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns:1fr 1fr;
   gap:10px;
-  padding:8px 0;
-  border-bottom:1px solid rgba(255,255,255,0.08);
 }
 
-.kv:last-child{
-  border-bottom:none;
+.mini{
+  padding:10px 12px;
+  border-radius:14px;
+  background:rgba(0,0,0,0.18);
+  border:1px solid rgba(255,255,255,0.08);
 }
 
-.k{
+.mini .k{
+  font-size:11px;
   color:var(--muted);
-  font-size:13px;
+  margin-bottom:4px;
 }
 
-.v{
+.mini .v{
+  font-size:14px;
   font-weight:900;
-  font-variant-numeric: tabular-nums;
 }
 
-.footer{
-  margin-top:30px;
-  text-align:center;
-  color:rgba(255,255,255,0.55);
-  font-size:12px;
+.chart-grid{
+  display:grid;
+  grid-template-columns:1fr 1fr;
+  gap:18px;
+  margin-bottom:22px;
+}
+
+.chart-card{
+  border-radius:20px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  box-shadow:var(--shadow);
+  padding:18px;
+}
+
+.chart-title{
+  margin:0 0 12px;
+  font-size:16px;
+  font-weight:900;
+}
+
+.table-card{
+  border-radius:20px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  box-shadow:var(--shadow);
+  padding:18px;
+}
+
+.table-title{
+  margin:0 0 12px;
+  font-size:16px;
+  font-weight:900;
+}
+
+.table-wrap{
+  overflow:auto;
+}
+
+table{
+  width:100%;
+  border-collapse:collapse;
+}
+
+th,td{
+  padding:10px 8px;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+  font-size:13px;
+  text-align:right;
+  white-space:nowrap;
+}
+
+th:first-child, td:first-child{
+  text-align:left;
+}
+
+th{
+  color:rgba(255,255,255,0.82);
+  font-weight:800;
+  background:rgba(0,0,0,0.14);
+}
+
+.positive{ color:#78ffb0; font-weight:900; }
+.negative{ color:#ff8ba7; font-weight:900; }
+
+@media (max-width: 1200px){
+  .summary-grid{grid-template-columns:repeat(2,1fr);}
+  .chart-grid{grid-template-columns:1fr;}
+}
+@media (max-width: 700px){
+  .summary-grid{grid-template-columns:1fr;}
 }
 </style>
 </head>
@@ -244,29 +273,18 @@ input[type="date"]{
       <div class="logo"></div>
       <div>
         <h1>BOATRACE AI</h1>
-        <small>シミュレーション期間集計</small>
+        <small>シミュレーション分析</small>
       </div>
     </div>
 
-    <div class="nav">
-      <a href="/">Home</a>
-      <a href="/sim">期間集計</a>
+    <div>
+      <a class="pill" href="/">Home</a>
     </div>
   </div>
 
-  <div class="card hero">
-    <h2>任意期間シミュレーション</h2>
-    <p>
-      1年シミュレーションCSVの中から、指定した期間だけを会場別に再集計します。<br>
-      ROI・的中率・投資額・回収額・利益・平均買い目点数を確認できます。
-    </p>
-  </div>
-
-  <div class="card filter-box">
-    <h3 class="filter-title">期間指定</h3>
-
-    <form method="get" action="/sim">
-      <div class="form-row">
+  <div class="card filter-card">
+    <form method="get">
+      <div class="filter-row">
         <div class="inputbox">
           <div class="label">開始日</div>
           <input type="date" name="start" value="{{ start_date_html }}" min="{{ available_min_html }}" max="{{ available_max_html }}">
@@ -277,51 +295,366 @@ input[type="date"]{
           <input type="date" name="end" value="{{ end_date_html }}" min="{{ available_min_html }}" max="{{ available_max_html }}">
         </div>
 
-        <button class="btn" type="submit">集計する</button>
+        <div class="inputbox">
+          <div class="label">会場</div>
+          <select name="venue">
+            <option value="">全会場</option>
+            {% for venue in all_venues %}
+              <option value="{{ venue }}" {% if selected_venue == venue %}selected{% endif %}>{{ venue }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        <button type="submit">更新</button>
       </div>
     </form>
 
     <div class="meta">
-      利用可能期間: {{ available_min_html or "-" }} 〜 {{ available_max_html or "-" }}<br>
-      集計対象行数: {{ sim_meta.row_count }}<br>
-      ※ 本ページの数値は、保存済みシミュレーションCSVを元に集計しています。
+      利用可能期間: {{ sim_meta.available_min_date }} ～ {{ sim_meta.available_max_date }}<br>
+      抽出行数: {{ sim_meta.row_count }}<br>
+      ※2026-05-03〜2026-07-14はログ記録が止まっていた期間のためデータがありません(結果待ちの直近レースも未確定分は集計から除外)
     </div>
   </div>
 
-  <div class="grid">
-    {% for venue in ["丸亀", "戸田", "児島"] %}
-      {% set row = sim_stats.get(venue, {}) %}
-      {% set roi = row.get("roi", 0) %}
-      {% set card_class = "bad" %}
-      {% if roi >= 1.05 %}
-        {% set card_class = "good" %}
-      {% elif roi >= 1.0 %}
-        {% set card_class = "warn" %}
-      {% endif %}
-
-      <div class="card stat-card {{ card_class }}">
-        <h3>{{ venue }}</h3>
-
-        <div class="kv"><div class="k">レース数</div><div class="v">{{ row.get("race_count", 0) }}</div></div>
-        <div class="kv"><div class="k">購入点数</div><div class="v">{{ row.get("buy_count", 0) }}</div></div>
-        <div class="kv"><div class="k">的中数</div><div class="v">{{ row.get("hit_count", 0) }}</div></div>
-        <div class="kv"><div class="k">的中率</div><div class="v">{{ "%.2f"|format(row.get("hit_rate", 0) * 100) }}%</div></div>
-        <div class="kv"><div class="k">平均買い目点数</div><div class="v">{{ "%.2f"|format(row.get("avg_points", 0)) }}</div></div>
-        <div class="kv"><div class="k">投資額</div><div class="v">{{ "{:,.0f}".format(row.get("total_bets", 0)) }}円</div></div>
-        <div class="kv"><div class="k">回収額</div><div class="v">{{ "{:,.0f}".format(row.get("total_return", 0)) }}円</div></div>
-        <div class="kv"><div class="k">利益</div><div class="v">{{ "{:,.0f}".format(row.get("total_profit", 0)) }}円</div></div>
-        <div class="kv"><div class="k">ROI</div><div class="v">{{ "%.3f"|format(row.get("roi", 0)) }}</div></div>
+  <section class="summary-grid">
+    {% for s in sim_summary_cards %}
+      <div class="summary-card">
+        <h3 class="summary-title">{{ s.venue }}</h3>
+        <div class="stat-grid">
+          <div class="mini">
+            <div class="k">レース数</div>
+            <div class="v">{{ s.race_count }}</div>
+          </div>
+          <div class="mini">
+            <div class="k">買い目数</div>
+            <div class="v">{{ s.buy_count }}</div>
+          </div>
+          <div class="mini">
+            <div class="k">的中数</div>
+            <div class="v">{{ s.hit_count }}</div>
+          </div>
+          <div class="mini">
+            <div class="k">的中率</div>
+            <div class="v">{{ "%.2f"|format(s.hit_rate * 100) }}%</div>
+          </div>
+          <div class="mini">
+            <div class="k">平均点数</div>
+            <div class="v">{{ "%.2f"|format(s.avg_points) }}</div>
+          </div>
+          <div class="mini">
+            <div class="k">ROI</div>
+            <div class="v">{{ "%.3f"|format(s.roi) }}</div>
+          </div>
+          <div class="mini">
+            <div class="k">総投資</div>
+            <div class="v">{{ "{:,.0f}".format(s.total_bets) }}円</div>
+          </div>
+          <div class="mini">
+            <div class="k">総損益</div>
+            <div class="v {% if s.total_profit >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "{:,.0f}".format(s.total_profit) }}円
+            </div>
+          </div>
+        </div>
       </div>
     {% endfor %}
-  </div>
+  </section>
 
-  <div class="footer">
-    BoatRace AI Local System<br>
-    <span style="opacity:0.7;">
-      ※本システムは趣味で作成された予測ツールです。結果の保証は一切行いません。投資・購入は必ず自己責任でお願いします。
-    </span>
-  </div>
+  <section class="chart-grid">
+    <div class="chart-card">
+      <h3 class="chart-title">累積損益推移</h3>
+      <canvas id="cumProfitChart"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <h3 class="chart-title">日別ROI推移</h3>
+      <canvas id="dailyRoiChart"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <h3 class="chart-title">会場別ROI比較</h3>
+      <canvas id="venueRoiChart"></canvas>
+    </div>
+
+    <div class="chart-card">
+      <h3 class="chart-title">会場別損益比較</h3>
+      <canvas id="venueProfitChart"></canvas>
+    </div>
+
+    {% if kelly_bankroll.available %}
+    <div class="chart-card" style="grid-column: 1 / -1;">
+      <h3 class="chart-title">Kelly資産推移(固定100円 vs Kellyサイジング、初期資金{{ "{:,.0f}".format(kelly_bankroll.initial_bankroll) }}円)</h3>
+      <canvas id="kellyBankrollChart"></canvas>
+      <div class="meta">
+        最終資産: 固定100円 {{ "{:,.0f}".format(kelly_bankroll.final_flat_bankroll) }}円 /
+        Kelly {{ "{:,.0f}".format(kelly_bankroll.final_kelly_bankroll) }}円
+        (現行buy_selectorの選定をそのまま使い、賭け金だけを変えた場合の比較。全期間固定なのでフィルターの影響を受けません)
+      </div>
+    </div>
+    {% endif %}
+  </section>
+
+  <section class="table-card" style="margin-bottom:22px;">
+    <h3 class="table-title">信頼度別(近似tier)の内訳</h3>
+    <div class="meta" style="margin-top:0;margin-bottom:10px;">
+      レース内の最高確率(top1)と2位との差(prob_gap)から近似的にA〜Dへ分類したものです。本番の判定(top_ev込み)とは完全一致しません。
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>tier</th>
+            <th>買い目数</th>
+            <th>的中数</th>
+            <th>的中率</th>
+            <th>総投資</th>
+            <th>総回収</th>
+            <th>総損益</th>
+            <th>ROI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in conf_tier_breakdown %}
+          <tr>
+            <td>{{ b.label }}</td>
+            <td>{{ b.buy_count }}</td>
+            <td>{{ b.hit_count }}</td>
+            <td>{{ "%.2f"|format(b.hit_rate * 100) }}%</td>
+            <td>{{ "{:,.0f}".format(b.total_bets) }}</td>
+            <td>{{ "{:,.0f}".format(b.total_return) }}</td>
+            <td class="{% if b.total_profit >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "{:,.0f}".format(b.total_profit) }}
+            </td>
+            <td>{{ "%.3f"|format(b.roi) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="table-card" style="margin-bottom:22px;">
+    <h3 class="table-title">オッズ帯別の内訳</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>オッズ帯</th>
+            <th>買い目数</th>
+            <th>的中数</th>
+            <th>的中率</th>
+            <th>総投資</th>
+            <th>総回収</th>
+            <th>総損益</th>
+            <th>ROI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in odds_band_breakdown %}
+          <tr>
+            <td>{{ b.label }}</td>
+            <td>{{ b.buy_count }}</td>
+            <td>{{ b.hit_count }}</td>
+            <td>{{ "%.2f"|format(b.hit_rate * 100) }}%</td>
+            <td>{{ "{:,.0f}".format(b.total_bets) }}</td>
+            <td>{{ "{:,.0f}".format(b.total_return) }}</td>
+            <td class="{% if b.total_profit >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "{:,.0f}".format(b.total_profit) }}
+            </td>
+            <td>{{ "%.3f"|format(b.roi) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="table-card">
+    <h3 class="table-title">会場別詳細</h3>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>会場</th>
+            <th>レース数</th>
+            <th>買い目数</th>
+            <th>的中数</th>
+            <th>的中率</th>
+            <th>平均点数</th>
+            <th>総投資</th>
+            <th>総回収</th>
+            <th>総損益</th>
+            <th>ROI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for s in sim_summary_cards %}
+          <tr>
+            <td>{{ s.venue }}</td>
+            <td>{{ s.race_count }}</td>
+            <td>{{ s.buy_count }}</td>
+            <td>{{ s.hit_count }}</td>
+            <td>{{ "%.2f"|format(s.hit_rate * 100) }}%</td>
+            <td>{{ "%.2f"|format(s.avg_points) }}</td>
+            <td>{{ "{:,.0f}".format(s.total_bets) }}</td>
+            <td>{{ "{:,.0f}".format(s.total_return) }}</td>
+            <td class="{% if s.total_profit >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "{:,.0f}".format(s.total_profit) }}
+            </td>
+            <td>{{ "%.3f"|format(s.roi) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
 
 </div>
+
+<script>
+const dailyAll = {{ sim_daily_all|tojson }};
+const summaryCards = {{ sim_summary_cards|tojson }};
+
+const dailyLabels = dailyAll.map(x => x.date);
+const cumProfitData = dailyAll.map(x => x.cum_profit);
+const dailyRoiData = dailyAll.map(x => x.roi);
+
+const venueLabels = summaryCards.map(x => x.venue);
+const venueRoiData = summaryCards.map(x => x.roi);
+const venueProfitData = summaryCards.map(x => x.total_profit);
+
+new Chart(document.getElementById("cumProfitChart"), {
+  type: "line",
+  data: {
+    labels: dailyLabels,
+    datasets: [{
+      label: "累積損益",
+      data: cumProfitData,
+      tension: 0.25,
+      borderWidth: 2
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: "#ffffff" } }
+    },
+    scales: {
+      x: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } },
+      y: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } }
+    }
+  }
+});
+
+new Chart(document.getElementById("dailyRoiChart"), {
+  type: "line",
+  data: {
+    labels: dailyLabels,
+    datasets: [{
+      label: "日別ROI",
+      data: dailyRoiData,
+      tension: 0.25,
+      borderWidth: 2
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: "#ffffff" } }
+    },
+    scales: {
+      x: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } },
+      y: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } }
+    }
+  }
+});
+
+new Chart(document.getElementById("venueRoiChart"), {
+  type: "bar",
+  data: {
+    labels: venueLabels,
+    datasets: [{
+      label: "ROI",
+      data: venueRoiData,
+      borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: "#ffffff" } }
+    },
+    scales: {
+      x: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } },
+      y: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } }
+    }
+  }
+});
+
+new Chart(document.getElementById("venueProfitChart"), {
+  type: "bar",
+  data: {
+    labels: venueLabels,
+    datasets: [{
+      label: "総損益",
+      data: venueProfitData,
+      borderWidth: 1
+    }]
+  },
+  options: {
+    responsive: true,
+    plugins: {
+      legend: { labels: { color: "#ffffff" } }
+    },
+    scales: {
+      x: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } },
+      y: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } }
+    }
+  }
+});
+
+const kellyBankroll = {{ kelly_bankroll|tojson }};
+if (kellyBankroll && kellyBankroll.available && document.getElementById("kellyBankrollChart")) {
+  const kellyLabels = kellyBankroll.rows.map(x => x.date);
+  const flatSeries = kellyBankroll.rows.map(x => x.flat_bankroll);
+  const kellySeries = kellyBankroll.rows.map(x => x.kelly_bankroll);
+
+  new Chart(document.getElementById("kellyBankrollChart"), {
+    type: "line",
+    data: {
+      labels: kellyLabels,
+      datasets: [
+        {
+          label: "固定100円ベット",
+          data: flatSeries,
+          tension: 0.15,
+          borderWidth: 2,
+          borderColor: "#ff8ba7",
+          pointRadius: 0
+        },
+        {
+          label: "Kellyサイジング",
+          data: kellySeries,
+          tension: 0.15,
+          borderWidth: 2,
+          borderColor: "#78ffb0",
+          pointRadius: 0
+        }
+      ]
+    },
+    options: {
+      responsive: true,
+      plugins: {
+        legend: { labels: { color: "#ffffff" } }
+      },
+      scales: {
+        x: { ticks: { color: "#cccccc", maxTicksLimit: 12 }, grid: { color: "rgba(255,255,255,0.08)" } },
+        y: { ticks: { color: "#cccccc" }, grid: { color: "rgba(255,255,255,0.08)" } }
+      }
+    }
+  });
+}
+</script>
+
 </body>
 </html>
