@@ -1,0 +1,210 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BoatRace AI | 展開予想</title>
+<style>
+:root{
+  --bg1:#071021;
+  --bg2:#0b1630;
+  --border: rgba(255,255,255,0.12);
+  --text: rgba(255,255,255,0.92);
+  --muted: rgba(255,255,255,0.70);
+  --shadow: 0 30px 90px rgba(0,0,0,0.55);
+  --radius: 22px;
+  --cardbg: rgba(255,255,255,0.05);
+}
+
+*{box-sizing:border-box;}
+body{
+  margin:0;
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,
+  "Hiragino Sans","Noto Sans JP","Yu Gothic",Meiryo,sans-serif;
+  color:var(--text);
+  background:
+    radial-gradient(1000px 600px at 20% 10%, rgba(64,179,255,0.25), transparent 60%),
+    radial-gradient(800px 600px at 80% 20%, rgba(255,120,200,0.18), transparent 60%),
+    linear-gradient(180deg,var(--bg1),var(--bg2));
+  min-height:100vh;
+}
+
+.wrap{
+  width:min(900px,95vw);
+  margin:0 auto;
+  padding:28px 0 60px;
+}
+
+.topbar{
+  display:flex;
+  justify-content:space-between;
+  align-items:center;
+  gap:12px;
+  margin-bottom:20px;
+  flex-wrap:wrap;
+}
+
+.brand{
+  display:flex;
+  align-items:center;
+  gap:14px;
+}
+.logo{
+  width:44px;
+  height:44px;
+  border-radius:14px;
+  background:linear-gradient(135deg,#40b3ff,#ff78c8);
+  box-shadow:0 10px 30px rgba(0,0,0,0.4);
+}
+.brand h1{
+  margin:0;
+  font-size:18px;
+  font-weight:900;
+}
+.brand small{
+  display:block;
+  font-size:12px;
+  color:var(--muted);
+  margin-top:4px;
+}
+
+.pill{
+  display:inline-flex;
+  align-items:center;
+  justify-content:center;
+  padding:10px 14px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.06);
+  color:var(--text);
+  text-decoration:none;
+  font-size:13px;
+  font-weight:800;
+}
+.pill:hover{ background:rgba(255,255,255,0.10); }
+
+.card{
+  border-radius:var(--radius);
+  border:1px solid var(--border);
+  background:var(--cardbg);
+  box-shadow:var(--shadow);
+  padding:20px;
+  margin-bottom:18px;
+}
+
+.card h2{
+  margin:0 0 6px;
+  font-size:16px;
+  font-weight:900;
+}
+
+.note{
+  font-size:12px;
+  color:var(--muted);
+  line-height:1.7;
+  margin-bottom:14px;
+}
+
+.pattern-badge{
+  display:inline-block;
+  padding:6px 14px;
+  border-radius:999px;
+  font-size:13px;
+  font-weight:900;
+  background:linear-gradient(135deg,#40b3ff,#78ffb0);
+  color:#071021;
+  margin-bottom:14px;
+}
+
+.scene{
+  display:flex;
+  gap:12px;
+  align-items:flex-start;
+  padding:12px 0;
+  border-bottom:1px solid rgba(255,255,255,0.08);
+}
+.scene:last-child{ border-bottom:none; }
+
+.scene-label{
+  min-width:150px;
+  font-size:13px;
+  font-weight:900;
+  color:rgba(255,255,255,0.85);
+}
+.scene-text{
+  font-size:14px;
+  line-height:1.7;
+  color:var(--text);
+}
+
+.error-box{
+  padding:16px;
+  border-radius:16px;
+  background:rgba(255,120,160,0.10);
+  border:1px solid rgba(255,120,160,0.28);
+  color:#ffb3c4;
+  font-size:14px;
+}
+
+.svg-wrap{
+  margin-top:6px;
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+  <div class="topbar">
+    <div class="brand">
+      <div class="logo"></div>
+      <div>
+        <h1>BOATRACE AI</h1>
+        <small>展開予想{% if venue %} — {{ venue }} {{ selected_race }}R ({{ date }}){% endif %}</small>
+      </div>
+    </div>
+    <div>
+      <a class="pill" href="/venue/{{ venue_key }}?date={{ date }}&race={{ selected_race }}&mode=full">レース予測に戻る</a>
+    </div>
+  </div>
+
+  {% if error_message %}
+    <div class="card">
+      <div class="error-box">{{ error_message }}</div>
+    </div>
+  {% elif scenario and scenario.available %}
+    <div class="card">
+      <h2>展開予想</h2>
+      <div class="note">
+        ※このページは学習データに基づく「誰が誰を抜いた」という展開そのものの記録は無いため、
+        3連単の予測確率(モデルが最も高いと見ている着順)から逆算し、
+        進入コース・スタートタイミング・展示タイムなどの指標をもとに
+        「もっともらしい展開の一例」をヒューリスティックに組み立てたものです。
+        実際のレース展開を保証するものではありません。
+      </div>
+      <div class="pattern-badge">予想パターン: {{ scenario.pattern }}</div>
+
+      <div class="svg-wrap">
+        {{ scenario.svg|safe }}
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>シーン別解説</h2>
+      {% for n in scenario.narrative %}
+        <div class="scene">
+          <div class="scene-label">{{ n.label }}</div>
+          <div class="scene-text">{{ n.text }}</div>
+        </div>
+      {% endfor %}
+    </div>
+  {% else %}
+    <div class="card">
+      <div class="error-box">
+        展開予想を表示するにはレースを選択してください(会場ページで予測を表示してからこのリンクを開いてください)。
+      </div>
+    </div>
+  {% endif %}
+
+</div>
+</body>
+</html>

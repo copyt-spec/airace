@@ -18,6 +18,7 @@ except Exception as e:
     RaceController = None  # type: ignore
 
 from engine.prediction_logger import build_prediction_rows, save_prediction_rows
+from engine.race_scenario import build_race_scenario
 from engine.venue_registry import (
     VENUE_MASTER,
     VENUE_ORDER,
@@ -807,6 +808,101 @@ def venue_page(venue_key: str):
         return f"Unknown venue_key: {venue_key}", 404
 
     return _render_venue_page(venue_name)
+
+
+def _render_scenario_page(venue_name: str):
+    if RaceController is None:
+        return "RaceController import error", 500
+
+    venue_name = _normalize_venue_name(venue_name)
+
+    date = request.args.get("date") or _today()
+    race_str = request.args.get("race")
+    model_mode = _resolve_model_mode(request.args.get("model_mode"))
+
+    if not race_str:
+        return render_template(
+            "scenario.html",
+            venue=venue_name,
+            venue_key=VENUE_MASTER[venue_name]["venue_key"],
+            date=date,
+            selected_race=0,
+            scenario={"available": False},
+            error_message="レースを選択してください(?race=N を指定)",
+            all_venues=VENUE_ORDER,
+            venue_config=VENUE_MASTER,
+            model_mode=model_mode,
+        )
+
+    race_no = int(race_str)
+    controller = RaceController(model_mode=model_mode)
+
+    try:
+        entries = controller.get_entries_race(venue_name, date, race_no)
+        entries = controller.enrich_entries(venue_name, entries, date=date, race_no=race_no)
+        entries = [dict(e) for e in entries]
+
+        try:
+            beforeinfo = controller.get_beforeinfo_only(venue_name, race_no=race_no, date=date)
+        except Exception:
+            beforeinfo = {}
+
+        bundle = controller.get_ai_prediction_bundle(
+            venue_name=venue_name,
+            date=date,
+            race_no=race_no,
+            top_n=20,
+            with_odds=True,
+            model_mode=model_mode,
+        ) or {}
+
+        raw_prob_map = bundle.get("prob_map", {}) or {}
+        probabilities = _complete_probabilities(raw_prob_map)
+
+        scenario = build_race_scenario(entries, beforeinfo, probabilities)
+
+        return render_template(
+            "scenario.html",
+            venue=venue_name,
+            venue_key=VENUE_MASTER[venue_name]["venue_key"],
+            date=date,
+            selected_race=race_no,
+            scenario=scenario,
+            error_message=None,
+            all_venues=VENUE_ORDER,
+            venue_config=VENUE_MASTER,
+            model_mode=model_mode,
+        )
+
+    except Exception as e:
+        print("\n" + "=" * 80)
+        print("[ERROR] _render_scenario_page failed")
+        print("=" * 80)
+        print("venue:", venue_name, "date:", date, "race:", race_no)
+        traceback.print_exc()
+
+        return render_template(
+            "scenario.html",
+            venue=venue_name,
+            venue_key=VENUE_MASTER[venue_name]["venue_key"],
+            date=date,
+            selected_race=race_no,
+            scenario={"available": False},
+            error_message=str(e),
+            all_venues=VENUE_ORDER,
+            venue_config=VENUE_MASTER,
+            model_mode=model_mode,
+        )
+
+
+@app.route("/venue/<venue_key>/scenario")
+def venue_scenario_page(venue_key: str):
+    try:
+        venue_name = get_venue_name_by_key(venue_key)
+    except Exception:
+        return f"Unknown venue_key: {venue_key}", 404
+
+    return _render_scenario_page(venue_name)
 
 
 if __name__ == "__main__":

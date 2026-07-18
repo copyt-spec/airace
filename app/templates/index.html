@@ -809,6 +809,21 @@
         </div>
         {% endif %}
 
+        {% if mode == "full" and race_signal is defined and race_signal %}
+        <div class="card">
+          <div class="hd">
+            <div class="ttl">展開予想</div>
+            <div class="tiny muted">Scenario</div>
+          </div>
+          <div class="bd">
+            <a class="pill" style="display:inline-flex;text-decoration:none;padding:10px 16px;border-radius:999px;border:1px solid var(--border);background:rgba(255,255,255,0.06);color:var(--text);font-weight:800;font-size:13px;"
+               href="/venue/{{ venue_key }}/scenario?date={{ date }}&race={{ selected_race }}&model_mode={{ model_mode }}">
+              スタート〜ゴールの展開予想を見る
+            </a>
+          </div>
+        </div>
+        {% endif %}
+
         {% if mode == "full" and best_bets is defined %}
         <div class="card">
           <div class="hd">
