@@ -51,6 +51,8 @@ data/datasets/trifecta_train_by_venue_partial_incomplete/
 data/logs/*.csv
 data/logs/*.json
 data/logs/analysis/
+data/logs/raceresult_debug/
+data/logs/daily_update_run_logs/
 
 # ▼ Render用に必要な軽量ファイルだけ許可
 !data/logs/home_stats_1y.json
