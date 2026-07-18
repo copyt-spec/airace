@@ -149,6 +149,36 @@ body{
 .svg-wrap{
   margin-top:6px;
 }
+
+.tab-row{
+  display:flex;
+  flex-wrap:wrap;
+  gap:8px;
+  margin-bottom:14px;
+}
+.tab-btn{
+  padding:8px 14px;
+  border-radius:999px;
+  border:1px solid var(--border);
+  background:rgba(255,255,255,0.05);
+  color:var(--muted);
+  font-size:12px;
+  font-weight:800;
+  cursor:pointer;
+}
+.tab-btn.active{
+  background:linear-gradient(135deg,#40b3ff,#78ffb0);
+  color:#071021;
+  border-color:transparent;
+}
+.course-map-pane{
+  display:none;
+  max-width:380px;
+  margin:0 auto;
+}
+.course-map-pane.active{
+  display:block;
+}
 </style>
 </head>
 <body>
@@ -183,9 +213,35 @@ body{
       </div>
       <div class="pattern-badge">予想パターン: {{ scenario.pattern }}</div>
 
+      {% if scenario.course_maps %}
+      <div class="tab-row">
+        {% for cm in scenario.course_maps %}
+          <div class="tab-btn {% if loop.first %}active{% endif %}" data-tab-target="cm-{{ cm.key }}" onclick="boatAiShowTab('{{ cm.key }}')">{{ cm.label }}</div>
+        {% endfor %}
+      </div>
+
+      {% for cm in scenario.course_maps %}
+        <div class="course-map-pane {% if loop.first %}active{% endif %}" id="cm-{{ cm.key }}">
+          {{ cm.svg|safe }}
+        </div>
+      {% endfor %}
+
+      <script>
+        function boatAiShowTab(key) {
+          document.querySelectorAll('.course-map-pane').forEach(function(el){ el.classList.remove('active'); });
+          document.querySelectorAll('.tab-btn').forEach(function(el){ el.classList.remove('active'); });
+          var pane = document.getElementById('cm-' + key);
+          if (pane) pane.classList.add('active');
+          document.querySelectorAll('.tab-btn').forEach(function(el){
+            if (el.getAttribute('data-tab-target') === 'cm-' + key) el.classList.add('active');
+          });
+        }
+      </script>
+      {% else %}
       <div class="svg-wrap">
         {{ scenario.svg|safe }}
       </div>
+      {% endif %}
     </div>
 
     <div class="card">

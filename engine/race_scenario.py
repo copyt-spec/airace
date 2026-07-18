@@ -301,6 +301,87 @@ def build_scenario_svg(checkpoints: List[Dict[str, Any]], width: int = 640) -> s
     return "".join(parts)
 
 
+def build_course_map_svgs(
+    ctx: Dict[int, Dict[str, Any]],
+    start_order: List[int],
+    turn1_order: List[int],
+    backstretch_order: List[int],
+    finish_order: List[int],
+    width: int = 380,
+    height: int = 560,
+) -> List[Dict[str, str]]:
+    """
+    2026-07-18追加: ユーザーから提示された「実際のコース上に艇を配置した俯瞰図
+    (フェーズ切り替えタブ付き)」のイメージに合わせた可視化。
+    ポジションチャート(build_scenario_svg)とは別に、水面を模した背景の上に
+    レーンカラーの艇アイコンを「進入コース(左右position)」×「そのフェーズでの
+    進み具合(奥行き)」で配置し、フェーズ(スタート前/第1マーク前/第1マーク/
+    第1マーク後スト/ゴール)ごとに1枚ずつSVGを作る。
+    """
+    node_r = 20
+    mark_x = width * 0.40
+    mark_y = height * 0.55
+
+    phase_defs = [
+        ("start", "スタート前", width * 0.82, start_order, "course"),
+        ("approach", "第1マーク前", width * 0.62, turn1_order, "rank"),
+        ("mark", "第1マーク", width * 0.42, turn1_order, "rank_wide"),
+        ("backstretch", "第1マーク後スト", width * 0.20, backstretch_order, "rank"),
+        ("finish", "ゴール(予想)", width * 0.06, finish_order, "rank"),
+    ]
+
+    lane_y_top = height * 0.14
+    lane_y_bottom = height * 0.90
+    lane_gap = (lane_y_bottom - lane_y_top) / 5.0
+
+    out: List[Dict[str, str]] = []
+
+    for key, label, depth_x, order, y_mode in phase_defs:
+        parts: List[str] = [
+            f'<svg viewBox="0 0 {width} {height}" xmlns="http://www.w3.org/2000/svg" '
+            f'role="img" style="width:100%;height:auto;">',
+            f'<rect x="0" y="0" width="{width}" height="{height}" rx="18" '
+            f'fill="#0c1f3d"/>',
+            f'<line x1="{mark_x:.0f}" y1="0" x2="{mark_x:.0f}" y2="{height}" '
+            f'stroke="#ff5a7a" stroke-width="1.5" stroke-dasharray="6,6" opacity="0.55"/>',
+            f'<text x="{mark_x:.0f}" y="20" text-anchor="middle" font-size="10" '
+            f'fill="#ff8ba7">進入可能ゾーン</text>',
+            f'<circle cx="{mark_x - 34:.0f}" cy="{mark_y:.0f}" r="16" fill="#ff9f43" opacity="0.9"/>',
+            f'<text x="{mark_x - 34:.0f}" y="{mark_y + 4:.0f}" text-anchor="middle" font-size="10" '
+            f'font-weight="700" fill="#111">1M</text>',
+        ]
+
+        for rank_idx, lane in enumerate(order):
+            course = ctx.get(lane, {}).get("course", lane)
+
+            if y_mode == "course":
+                y = lane_y_top + (course - 1) * lane_gap
+                x = depth_x
+            elif y_mode == "rank_wide":
+                y = lane_y_top + rank_idx * lane_gap
+                # 進入コースが外(数字が大きい)ほど、外側へ膨らむ(まくりの弧を表現)
+                x = depth_x + (course - 1) * (width * 0.045)
+            else:
+                y = lane_y_top + rank_idx * lane_gap
+                x = depth_x
+
+            fill, text_color = LANE_COLORS.get(lane, ("#888888", "#ffffff"))
+            parts.append(
+                f'<circle cx="{x:.0f}" cy="{y:.0f}" r="{node_r}" fill="{fill}" '
+                f'stroke="rgba(255,255,255,0.35)" stroke-width="2"/>'
+            )
+            parts.append(
+                f'<text x="{x:.0f}" y="{y + 5:.0f}" text-anchor="middle" font-size="14" '
+                f'font-weight="800" fill="{text_color}">{lane}</text>'
+            )
+
+        parts.append("</svg>")
+
+        out.append({"key": key, "label": label, "svg": "".join(parts)})
+
+    return out
+
+
 def build_race_scenario(
     entries: List[Dict[str, Any]],
     beforeinfo: Optional[Dict[Any, Any]],
@@ -336,6 +417,11 @@ def build_race_scenario(
     except Exception:
         svg = ""
 
+    try:
+        course_maps = build_course_map_svgs(ctx, start_order, turn1_order, backstretch_order, finish_order)
+    except Exception:
+        course_maps = []
+
     return {
         "available": True,
         "checkpoints": checkpoints,
@@ -344,5 +430,6 @@ def build_race_scenario(
         "predicted_combo": combo,
         "predicted_prob": top_prob,
         "svg": svg,
+        "course_maps": course_maps,
         "lane_context": ctx,
     }
