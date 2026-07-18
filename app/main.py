@@ -859,7 +859,7 @@ def _render_scenario_page(venue_name: str):
         raw_prob_map = bundle.get("prob_map", {}) or {}
         probabilities = _complete_probabilities(raw_prob_map)
 
-        scenario = build_race_scenario(entries, beforeinfo, probabilities)
+        scenario = build_race_scenario(entries, beforeinfo, probabilities, venue=venue_name)
 
         return render_template(
             "scenario.html",

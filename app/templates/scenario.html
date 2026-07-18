@@ -173,7 +173,7 @@ body{
 }
 .course-map-pane{
   display:none;
-  max-width:380px;
+  max-width:640px;
   margin:0 auto;
 }
 .course-map-pane.active{
@@ -253,6 +253,34 @@ body{
         </div>
       {% endfor %}
     </div>
+
+    {% if scenario.venue_stats_table %}
+    <div class="card">
+      <h2>参考: この会場の進入コース別 実データ内訳</h2>
+      <div class="note">
+        raw_txt(公式レース結果ファイル)から集計した、この会場での実際の
+        進入コース別1着率・3着以内率です(モデルの予測ではなく単純な過去集計)。
+      </div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr>
+            <th style="text-align:left;padding:8px 6px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);">コース</th>
+            <th style="text-align:right;padding:8px 6px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);">1着率</th>
+            <th style="text-align:right;padding:8px 6px;font-size:12px;color:var(--muted);border-bottom:1px solid var(--border);">3着以内率</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for row in scenario.venue_stats_table %}
+          <tr>
+            <td style="padding:8px 6px;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.06);">{{ row.course }}コース</td>
+            <td style="text-align:right;padding:8px 6px;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.06);">{{ "%.1f"|format(row.win_rate * 100) }}%</td>
+            <td style="text-align:right;padding:8px 6px;font-size:13px;border-bottom:1px solid rgba(255,255,255,0.06);">{{ "%.1f"|format(row.place_top3_rate * 100) }}%</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+    {% endif %}
   {% else %}
     <div class="card">
       <div class="error-box">

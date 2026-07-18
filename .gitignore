@@ -37,6 +37,8 @@ data/raw_txt/
 # =========================
 data/datasets/*.csv
 data/datasets/**/*.csv
+# 2026-07-18追加: 展開予想ページで使う会場別コース統計(軽量、raw_txtの実データ集計)
+!data/datasets/venue_course_stats.csv
 # 2026-07-17追加: 天候バグ修正時の作業でできた不要な巨大ファイル/ディレクトリ
 # (中身はcsvだが、ディレクトリ自体が未追跡扱いになるのを防ぐため明示的に除外)
 data/datasets/*.partial_discard
