@@ -33,6 +33,7 @@ raw_txt由来のstartk_dataset.csv全件から集計した、会場別・進入�
 """
 
 import csv
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -378,15 +379,61 @@ START_X = 900.0
 START_TOP = 500.0
 START_BOTTOM = 1000.0
 
-# フェーズごとの「順位スロット」座標。index=0が先頭。KyoteiApp側のRaceFrame.defaultFrames()の
-# 座標セットをそのまま移植しており、同じコース上に艇を配置した俯瞰図として整合させている。
+# スタート/ゴールは進入コース順・着順そのままの一直線スロット(index=0が先頭)。
 _PHASE_SLOTS: Dict[str, List[Tuple[float, float]]] = {
     "start": [(875, 520), (875, 600), (875, 680), (875, 760), (875, 840), (875, 920)],
-    "approach": [(1100, 520), (1085, 595), (1070, 672), (1056, 750), (1042, 822), (1028, 888)],
-    "mark": [(1358, 382), (1332, 432), (1298, 480), (1258, 524), (1214, 562), (1166, 594)],
-    "backstretch": [(1160, 360), (1050, 378), (940, 390), (830, 398), (720, 404), (610, 408)],
     "finish": [(720, 520), (720, 600), (720, 680), (720, 760), (720, 840), (720, 920)],
 }
+
+# 2026-07-19改修: 「ターンマークで回る感じが不自然」というフィードバックを受け、
+# 第1マーク前後は「進入コースごとの半径 + 順位ごとの回転角」の極座標モデルに
+# 変更した。内側コースはマークにピッタリ沿って回り、外側コースは大きな半径で
+# 外を回り込む(=まくりが物理的に自然に見える)ようにするのが狙い。
+_MARK_RADIUS_BY_COURSE: Dict[int, float] = {1: 55.0, 2: 85.0, 3: 115.0, 4: 148.0, 5: 182.0, 6: 218.0}
+_MARK_ENTRY_ANGLE_DEG = 250.0  # マーク進入時(ホームストレッチ側)の角度
+_MARK_EXIT_ANGLE_DEG = 110.0   # マーク脱出時(バックストレッチ側)の角度
+
+# フェーズごとの進み具合(0=進入直後、1=脱出しきった状態)の範囲。
+# 同じフェーズ内でも先頭(rank0)ほど進み、最後尾ほど遅れる。
+_MARK_PHASE_PROGRESS: Dict[str, Tuple[float, float]] = {
+    "approach": (0.06, 0.32),
+    "mark": (0.38, 0.66),
+    "backstretch": (0.72, 0.94),
+}
+# バックストレッチでは実際のレースと同様に少し隊列が締まる(半径を縮める)
+_MARK_PHASE_RADIUS_SCALE: Dict[str, float] = {
+    "approach": 1.0,
+    "mark": 1.0,
+    "backstretch": 0.55,
+}
+
+
+def _mark_polar_position(course: int, progress: float, radius_scale: float) -> Tuple[float, float]:
+    r = _MARK_RADIUS_BY_COURSE.get(course, 150.0) * radius_scale
+    angle_deg = _MARK_ENTRY_ANGLE_DEG + (_MARK_EXIT_ANGLE_DEG - _MARK_ENTRY_ANGLE_DEG) * progress
+    theta = math.radians(angle_deg)
+    x = MARK1[0] + r * math.cos(theta)
+    y = MARK1[1] - r * math.sin(theta)
+    return (x, y)
+
+
+def _start_order_with_st(ctx: Dict[int, Dict[str, Any]]) -> List[int]:
+    """
+    2026-07-19改修: 「6号艇のスタートが早いなら6号艇を前に出すべき」という
+    フィードバックを受け、進入コース順をベースにしつつ、隣の艇より明確に
+    ST(スタートタイミング)が良い艇を前に押し出す(バブルソート式)。
+    """
+    order = _order_by_course(ctx)
+    for _ in range(len(order)):
+        changed = False
+        for i in range(len(order) - 1):
+            a, b = order[i], order[i + 1]
+            if ctx[b]["st"] <= ctx[a]["st"] - 0.03:
+                order[i], order[i + 1] = b, a
+                changed = True
+        if not changed:
+            break
+    return order
 
 
 def build_course_map_svgs(
@@ -420,6 +467,27 @@ def build_course_map_svgs(
         "backstretch": backstretch_order,
         "finish": finish_order,
     }
+
+    # フェーズ×レーンの実座標を先にまとめて計算する(ガイド線・艇描画の両方で使う)。
+    # start/finishは進入コース順・着順そのままの一直線、approach/mark/backstretchは
+    # 「進入コースごとの半径 + 順位ごとの回転角」の極座標(外側コースほど大回り)。
+    phase_positions: Dict[str, Dict[int, Tuple[float, float]]] = {}
+    for phase_key, order in slot_order_map.items():
+        if phase_key in _PHASE_SLOTS:
+            slots = _PHASE_SLOTS[phase_key]
+            phase_positions[phase_key] = {
+                lane: slots[rank_idx] for rank_idx, lane in enumerate(order) if rank_idx < len(slots)
+            }
+        else:
+            lo, hi = _MARK_PHASE_PROGRESS[phase_key]
+            radius_scale = _MARK_PHASE_RADIUS_SCALE[phase_key]
+            n = len(order)
+            positions: Dict[int, Tuple[float, float]] = {}
+            for rank_idx, lane in enumerate(order):
+                frac = hi - (hi - lo) * (rank_idx / max(1, n - 1))
+                course = ctx.get(lane, {}).get("course", lane)
+                positions[lane] = _mark_polar_position(course, frac, radius_scale)
+            phase_positions[phase_key] = positions
 
     scale = min((width - 24) / COURSE_W, (height - 24) / COURSE_H)
     ox = (width - COURSE_W * scale) / 2
@@ -483,12 +551,13 @@ def build_course_map_svgs(
             )
 
         # 全フェーズを通した各レーンの参考ルート(薄いガイド線)
+        phase_order_keys = ["start", "approach", "mark", "backstretch", "finish"]
         for lane in range(1, 7):
             pts: List[Tuple[float, float]] = []
-            for rk, slot_order in slot_order_map.items():
-                if lane in slot_order:
-                    idx = slot_order.index(lane)
-                    pts.append(_PHASE_SLOTS[rk][idx])
+            for rk in phase_order_keys:
+                pos = phase_positions.get(rk, {}).get(lane)
+                if pos is not None:
+                    pts.append(pos)
             if len(pts) < 2:
                 continue
             fill, _ = LANE_COLORS.get(lane, ("#888888", "#ffffff"))
@@ -500,9 +569,10 @@ def build_course_map_svgs(
 
         # 艇(カプセル型。影→船体→番号の順で描画)
         for rank_idx, lane in enumerate(order):
-            if rank_idx >= len(_PHASE_SLOTS[key]):
+            pos = phase_positions.get(key, {}).get(lane)
+            if pos is None:
                 continue
-            px, py = _PHASE_SLOTS[key][rank_idx]
+            px, py = pos
             x, y = tv(px, py)
             fill, text_color = LANE_COLORS.get(lane, ("#888888", "#ffffff"))
             parts.append(
@@ -548,7 +618,7 @@ def build_race_scenario(
 
     combo, top_prob = _top_combo(probabilities)
 
-    start_order = _order_by_course(ctx)
+    start_order = _start_order_with_st(ctx)
     turn1_order = _move_to_position(start_order, final_order[0], 0)
     backstretch_order = _move_to_position(turn1_order, final_order[1], 1)
     finish_order = final_order
