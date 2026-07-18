@@ -209,9 +209,10 @@
     .ranklist{display:flex;flex-direction:column;gap:6px;}
     .rankitem{
       display:flex;
+      flex-wrap: wrap;
       align-items:center;
       justify-content:space-between;
-      gap:6px;
+      gap:6px 10px;
       padding: 6px 7px;
       border-radius: 12px;
       border: 1px solid rgba(255,255,255,0.10);
@@ -225,7 +226,7 @@
       background: var(--good);
       border-color: var(--good-line);
     }
-    .rankleft{display:flex; align-items:center; gap:6px; min-width:0;}
+    .rankleft{display:flex; align-items:center; gap:6px; min-width:0; flex: 1 1 auto;}
     .rk{
       width: 22px;
       height: 22px;
@@ -245,20 +246,26 @@
       font-weight: 900;
       letter-spacing: .2px;
       white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
-      max-width: 110px;
       font-size: 12px;
+      flex: 0 0 auto;
     }
     .rightbox{
       display:flex;
       flex-direction:column;
       align-items:flex-end;
       gap:1px;
+      flex: 0 0 auto;
+      min-width: 0;
+      text-align: right;
     }
-    .pval{font-family: var(--mono); font-weight: 900; font-size: 12px;}
-    .oval{font-family: var(--mono); font-size: 10px; color: rgba(255,255,255,0.82)}
-    .evval{font-family: var(--mono); font-size: 10px; color: rgba(255,255,255,0.90)}
+    .pval{font-family: var(--mono); font-weight: 900; font-size: 12px; white-space: nowrap;}
+    .oval{font-family: var(--mono); font-size: 10px; color: rgba(255,255,255,0.82); white-space: nowrap;}
+    .evval{font-family: var(--mono); font-size: 10px; color: rgba(255,255,255,0.90); white-space: nowrap;}
+
+    @media (max-width: 480px){
+      .rankitem{ flex-direction: column; align-items: stretch; }
+      .rightbox{ align-items: flex-start; text-align: left; }
+    }
 
     .oddsGrid{
       display:grid;
