@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 import time
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, Optional
 
 import requests
 from bs4 import BeautifulSoup
@@ -35,16 +35,13 @@ DEBUG_DIR = PROJECT_ROOT / "data" / "logs" / "raceresult_debug"
 _SESSION: Optional[requests.Session] = None
 
 _NO_DATA_MARKERS = [
-    "該当するデータがありません",
+    # 実ページで確認した実際の文言(2026-07-19)。「該当する」は付かない。
+    "データがありません",
     "見つかりません",
     "ページが見つかりません",
 ]
 
-_RE_COMBO_3 = re.compile(r"([1-6]-[1-6]-[1-6])")
-_RE_COMBO_2 = re.compile(r"([1-6]-[1-6])")
-_RE_YEN = re.compile(r"([\d,]+)\s*円")
-
-_LABELS = ["3連単", "3連複", "2連単", "2連複", "拡連複", "単勝", "複勝"]
+_RE_YEN = re.compile(r"([\d,]+)")
 
 
 def _get_session() -> requests.Session:
@@ -66,34 +63,49 @@ def _get_session() -> requests.Session:
     return _SESSION
 
 
-def _extract_after_label(text: str, label: str, next_labels: List[str]) -> str:
-    """text 中で label が最初に現れる位置から、次のラベルが現れる位置(または末尾)までを返す"""
-    idx = text.find(label)
-    if idx < 0:
-        return ""
-    start = idx + len(label)
-    end = len(text)
-    for nl in next_labels:
-        p = text.find(nl, start)
-        if p >= 0:
-            end = min(end, p)
-    return text[start:end]
+_RE_COMBO3_FULL = re.compile(r"^[1-6]-[1-6]-[1-6]$")
+_RE_COMBO2_FULL = re.compile(r"^[1-6]-[1-6]$")
 
-
-def _first_combo_and_payout(segment: str, combo_re: "re.Pattern") -> Optional[Tuple[str, float]]:
-    combo_m = combo_re.search(segment)
-    yen_m = _RE_YEN.search(segment)
-    if combo_m and yen_m:
-        return combo_m.group(1), float(yen_m.group(1).replace(",", ""))
-    return None
+_LABEL_TO_FIELDS = {
+    "3連単": ("actual_combo", "payout", _RE_COMBO3_FULL),
+    "3連複": ("combo_3puku", "payout_3puku", _RE_COMBO3_FULL),
+    "2連単": ("combo_2tan", "payout_2tan", _RE_COMBO2_FULL),
+    "2連複": ("combo_2puku", "payout_2puku", _RE_COMBO2_FULL),
+}
 
 
 def _parse_payout_section(soup: BeautifulSoup) -> Dict[str, Any]:
     """
-    「払戻金」という文字列を含むテーブルを探し、正規化したテキストから
+    「払戻金」を含むテーブル(勝式/組番/払戻金/人気の列を持つ、
+    class="is-w495" のテーブル)を探し、DOM構造から直接
     3連単/3連複/2連単/2連複 の組番・払戻金を抽出する。
-    build_results_from_k.py の RE_PAYOUT_SUMMARY_LINE_FULL と同じ発想を
-    HTMLテキスト向けに書き直したもの。
+
+    実ページのDOM構造(2026-07時点で確認済み):
+      <table class="is-w495">
+        <tbody>  <!-- 勝式ごとに個別のtbody -->
+          <tr class="is-p3-0">
+            <td rowspan="2">3連単</td>
+            <td><div class="numberSet1 is-small"><div class="numberSet1_row">
+              <span class="numberSet1_number is-type2">2</span>
+              <span class="numberSet1_text">-</span>
+              <span class="numberSet1_number is-type4">4</span>
+              <span class="numberSet1_text">-</span>
+              <span class="numberSet1_number is-type1">1</span>
+            </div></div></td>
+            <td><span class="is-payout1">&yen;4,190</span></td>
+            <td>17</td>
+          </tr>
+          <tr class="is-p3-0">...空の継続行(2着候補が無い場合の穴埋め)...</tr>
+        </tbody>
+        <tbody>...3連複...</tbody>
+        ...
+      </table>
+
+    以前のバージョンは get_text(separator="|") で全体をテキスト化してから
+    正規表現で探していたが、組番の各桁が別々の<span>に入っているため
+    "2-4-1" が "2|-|4|-|1" のように分断され、正規表現が一切マッチしない
+    バグがあった(2026-07-19に実際のHTMLで発覚・修正)。
+    DOM構造(.numberSet1_row / .is-payout1)を直接見ることで解決する。
     """
     target = None
     for table in soup.find_all("table"):
@@ -104,32 +116,39 @@ def _parse_payout_section(soup: BeautifulSoup) -> Dict[str, Any]:
     if target is None:
         return {}
 
-    raw = target.get_text(separator="|")
-    text = re.sub(r"\|+", "|", raw)
-
     out: Dict[str, Any] = {}
 
-    for i, label in enumerate(_LABELS):
-        seg = _extract_after_label(text, label, _LABELS[i + 1:])
-        if not seg:
+    for tbody in target.find_all("tbody"):
+        rows = tbody.find_all("tr")
+        if not rows:
             continue
 
-        if label == "3連単":
-            r = _first_combo_and_payout(seg, _RE_COMBO_3)
-            if r:
-                out["actual_combo"], out["payout"] = r
-        elif label == "3連複":
-            r = _first_combo_and_payout(seg, _RE_COMBO_3)
-            if r:
-                out["combo_3puku"], out["payout_3puku"] = r
-        elif label == "2連単":
-            r = _first_combo_and_payout(seg, _RE_COMBO_2)
-            if r:
-                out["combo_2tan"], out["payout_2tan"] = r
-        elif label == "2連複":
-            r = _first_combo_and_payout(seg, _RE_COMBO_2)
-            if r:
-                out["combo_2puku"], out["payout_2puku"] = r
+        label_td = rows[0].find("td")
+        label = label_td.get_text(strip=True) if label_td else ""
+        if label not in _LABEL_TO_FIELDS:
+            continue
+
+        combo_field, payout_field, combo_re = _LABEL_TO_FIELDS[label]
+        if combo_field in out:
+            continue
+
+        for row in rows:
+            number_row = row.select_one(".numberSet1_row")
+            payout_span = row.select_one(".is-payout1")
+            if number_row is None or payout_span is None:
+                continue
+
+            combo_text = number_row.get_text(strip=True).replace("=", "-")
+            if not combo_re.match(combo_text):
+                continue
+
+            yen_m = _RE_YEN.search(payout_span.get_text(strip=True))
+            if not yen_m:
+                continue
+
+            out[combo_field] = combo_text
+            out[payout_field] = float(yen_m.group(1).replace(",", ""))
+            break
 
     return out
 
