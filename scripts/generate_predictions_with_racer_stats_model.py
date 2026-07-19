@@ -73,6 +73,27 @@ def _load_venue_dataset(venue: str) -> pd.DataFrame:
     return pd.concat(chunks, ignore_index=True)
 
 
+def _compute_holdout_dates(df: pd.DataFrame, test_size: float) -> set:
+    """
+    scripts/train_binary_catboost_per_venue_with_racer_stats.py の
+    _split_by_date と全く同じロジック(日付でソートし、末尾test_size割合を
+    holdoutとする)で、その会場のデータセットから「モデルが学習時に一度も
+    見ていないはずの日付集合」を再現する。
+
+    これを使わずに predictions.csv にある全レースを対象にしてしまうと、
+    学習に使った期間まで評価に含めてしまい(=モデルが答えを記憶している
+    データを採点することになり)、ROIが実力より大幅に良く出る事故につながる
+    (2026-07-19に実際に発生し、桐生217%・戸田229%等の異常値が出たため
+    このガードを追加した)。
+    """
+    dates = sorted(df["date"].astype(str).str.zfill(8).unique())
+    n = len(dates)
+    if n < 5:
+        return set()
+    cutoff_idx = max(1, int(n * (1.0 - test_size)))
+    return set(dates[cutoff_idx:])
+
+
 def generate_for_venue(
     venue: str,
     temperature: float,
@@ -80,15 +101,20 @@ def generate_for_venue(
     model_suffix: str = "",
     valid_dates: set | None = None,
     out_suffix: str = "",
+    test_size: float = 0.20,
+    full_range: bool = False,
 ) -> None:
     """
     model_suffix: 通常は""(本番の_with_racer_statsモデル)。
       2026-07-16追加: engine.kelly_allocator...ではなく、選手勝率などの
       特徴量重みを変えた実験モデル(例: "_w4x")を評価したい場合に指定する
       (scripts/sweep_racer_stats_weight.py から使う)。
-    valid_dates: 指定した場合、その日付集合に含まれるレースだけを対象にする
-      (=学習時のvalidation splitと同じ日付集合に絞ることで、真のholdoutでの
-      公正な比較にする)。Noneなら従来通りpredictions.csvにある全レースが対象。
+    valid_dates: 指定した場合、その日付集合に含まれるレースだけを対象にする。
+      Noneの場合、full_range=Falseなら自動的にそのモデルの日付分割holdout
+      期間(学習に使っていない末尾test_size割合の日付)だけに絞る(デフォルト、
+      2026-07-19に安全側へ変更)。full_range=Trueを明示した場合のみ、
+      predictions.csvにある全期間を対象にする(学習データを含む可能性があり、
+      ROI検証としては無効。オフラインの動作確認等の用途のみに使うこと)。
     out_suffix: 出力ファイル名に追加するサフィックス(重み実験の結果を
       本番用の比較ファイルと混同しないようにするため)。
     """
@@ -114,19 +140,26 @@ def generate_for_venue(
     target_pred = pred[pred["venue"] == venue].copy()
     target_races = target_pred[["date", "race_no"]].drop_duplicates()
 
+    df = _load_venue_dataset(venue)
+    df["date"] = df["date"].astype(str).str.zfill(8)
+    df["race_no"] = pd.to_numeric(df["race_no"], errors="coerce").fillna(0).astype(int)
+
+    if valid_dates is None and not full_range:
+        valid_dates = _compute_holdout_dates(df, test_size)
+        print(f"[{venue}] valid_dates未指定 -> 自動でholdout期間に限定します "
+              f"({len(valid_dates)}日, {min(valid_dates) if valid_dates else '-'}〜"
+              f"{max(valid_dates) if valid_dates else '-'})")
+
     if valid_dates is not None:
         target_races = target_races[target_races["date"].isin(valid_dates)].copy()
         target_pred = target_pred.merge(target_races, on=["date", "race_no"], how="inner")
 
-    print("target races (real odds available):", len(target_races))
+    print("target races (real odds available, holdout範囲適用後):", len(target_races))
 
     if len(target_races) < min_races:
-        print(f"[SKIP] {venue}: 実オッズ付きレースが{min_races}件未満のためバックテスト対象外")
+        print(f"[SKIP] {venue}: 実オッズ付きholdoutレースが{min_races}件未満のためバックテスト対象外")
         return
 
-    df = _load_venue_dataset(venue)
-    df["date"] = df["date"].astype(str).str.zfill(8)
-    df["race_no"] = pd.to_numeric(df["race_no"], errors="coerce").fillna(0).astype(int)
     df = df.merge(target_races, on=["date", "race_no"], how="inner")
 
     if df.empty:
@@ -177,6 +210,15 @@ def main() -> None:
     parser.add_argument("--all", action="store_true")
     parser.add_argument("--temperature", type=float, default=0.90)
     parser.add_argument("--min_races", type=int, default=5)
+    parser.add_argument(
+        "--test_size", type=float, default=0.20,
+        help="学習時に指定したtest_sizeと必ず合わせること(train_binary_catboost_per_venue_with_racer_stats.pyのデフォルトは0.20)",
+    )
+    parser.add_argument(
+        "--full_range", action="store_true",
+        help="危険: holdout期間に絞らず、predictions.csvにある全期間を対象にする"
+             "(学習データを含みROI検証としては無効。オフライン確認用途のみ)",
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -188,7 +230,13 @@ def main() -> None:
 
     for v in venues:
         try:
-            generate_for_venue(v, temperature=args.temperature, min_races=args.min_races)
+            generate_for_venue(
+                v,
+                temperature=args.temperature,
+                min_races=args.min_races,
+                test_size=args.test_size,
+                full_range=args.full_range,
+            )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")
 
