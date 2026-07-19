@@ -126,9 +126,21 @@ def generate_for_venue(
     print("GENERATE PREDICTIONS:", venue, f"(model_suffix={model_suffix!r})" if model_suffix else "")
     print("=" * 80)
 
+    out_path = PROJECT_ROOT / "data" / "logs" / f"predictions_with_racer_stats_{venue}{out_suffix}.csv"
+
+    def _skip(reason: str) -> None:
+        # 2026-07-19追加: 以前のファイル(全期間版など)がここに残っていると、
+        # 今回スキップしたにもかかわらず古い(=リーク混入の可能性がある)
+        # ファイルが「有効な検証結果」として誤って使われ続けてしまう事故が
+        # 実際に発生した(常滑で発覚)。スキップ時は必ず古い出力を削除する。
+        print(f"[SKIP] {venue}: {reason}")
+        if out_path.exists():
+            out_path.unlink()
+            print(f"[SKIP] {venue}: 古い出力ファイルを削除しました -> {out_path}")
+
     model_path = MODEL_DIR / f"trifecta_binary_catboost_{venue}_with_racer_stats{model_suffix}.cbm"
     if not model_path.exists():
-        print(f"[SKIP] model not found: {model_path}")
+        _skip(f"model not found: {model_path}")
         return
 
     model = CatBoostClassifier()
@@ -160,13 +172,13 @@ def generate_for_venue(
     print("target races (real odds available, holdout範囲適用後):", len(target_races))
 
     if len(target_races) < min_races:
-        print(f"[SKIP] {venue}: 実オッズ付きholdoutレースが{min_races}件未満のためバックテスト対象外")
+        _skip(f"実オッズ付きholdoutレースが{min_races}件未満のためバックテスト対象外")
         return
 
     df = df.merge(target_races, on=["date", "race_no"], how="inner")
 
     if df.empty:
-        print(f"[SKIP] {venue}: 学習データセットとpredictions.csvが重ならない")
+        _skip("学習データセットとpredictions.csvが重ならない")
         return
 
     print("matched rows:", len(df), "races:", df[["date", "race_no"]].drop_duplicates().shape[0])
@@ -199,7 +211,6 @@ def generate_for_venue(
     )
     out_df = out_df.merge(odds_lookup, on=["date", "race_no", "combo"], how="left")
 
-    out_path = PROJECT_ROOT / "data" / "logs" / f"predictions_with_racer_stats_{venue}{out_suffix}.csv"
     out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 
     print("saved:", out_path)
