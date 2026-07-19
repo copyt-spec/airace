@@ -22,6 +22,7 @@ data/datasets/racer_race_history.csv と racer_point_in_time_stats.csv は
 
 import argparse
 import json
+import sys
 from pathlib import Path
 from typing import Any, Dict, List, Tuple
 
@@ -31,9 +32,11 @@ from catboost import CatBoostClassifier
 from sklearn.metrics import log_loss, roc_auc_score
 from sklearn.model_selection import train_test_split
 
-from engine.venue_registry import VENUE_ORDER, normalize_venue_name
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from engine.venue_registry import VENUE_ORDER, normalize_venue_name  # noqa: E402
 DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
 RACER_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "racer_point_in_time_stats.csv"
 MODEL_DIR = PROJECT_ROOT / "data" / "models"

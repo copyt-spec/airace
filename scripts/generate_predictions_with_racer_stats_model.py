@@ -19,6 +19,7 @@ data/logs/predictions.csv に載っている実際の対戦カード(過去に�
 """
 
 import argparse
+import sys
 from pathlib import Path
 from typing import Dict, List
 
@@ -26,15 +27,17 @@ import numpy as np
 import pandas as pd
 from catboost import CatBoostClassifier
 
-from engine.venue_registry import VENUE_ORDER, normalize_venue_name
-from scripts.train_binary_catboost_per_venue_with_racer_stats import (
+PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from engine.venue_registry import VENUE_ORDER, normalize_venue_name  # noqa: E402
+from scripts.train_binary_catboost_per_venue_with_racer_stats import (  # noqa: E402
     SPLIT_BY_VENUE_DIR,
     _add_feature_block,
     _add_racer_stats_block,
     _load_racer_stats,
 )
-
-PROJECT_ROOT = Path(__file__).resolve().parents[1]
 DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
 PREDICTIONS_CSV = PROJECT_ROOT / "data" / "logs" / "predictions.csv"

@@ -10,13 +10,17 @@ data/datasets/trifecta_train.csv (19.5M行、全24会場ぶん、約6GB)を1回�
 出力: data/datasets/trifecta_train_by_venue/{venue}.csv
 """
 
+import sys
 from pathlib import Path
 
 import pandas as pd
 
-from engine.venue_registry import VENUE_ORDER, normalize_venue_name
-
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from engine.venue_registry import VENUE_ORDER, normalize_venue_name  # noqa: E402
+
 SRC = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
 OUT_DIR = PROJECT_ROOT / "data" / "datasets" / "trifecta_train_by_venue"
 
