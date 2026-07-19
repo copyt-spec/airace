@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 import os
 import traceback
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
 from typing import Any, Dict, List, Tuple
@@ -727,6 +727,127 @@ def home():
     )
 
 
+MODEL_COMPARISON_CSV = LOG_DIR / "model_comparison_all_venues_holdout.csv"
+
+
+def _load_model_comparison() -> Dict[str, Any]:
+    """
+    scripts/compare_racer_stats_holdout_all_venues.py が出力する
+    data/logs/model_comparison_all_venues_holdout.csv (全24会場、旧モデル
+    with_racer_no vs 新モデルwith_racer_stats+天候修正の、真のholdout期間
+    ROI比較)を読み込む。実オッズが無い会場はオフラインのlogloss/aucのみの
+    行になる(ROI未検証)。
+    """
+    empty = {"available": False, "validated_rows": [], "offline_rows": [], "validated_count": 0, "offline_count": 0}
+
+    if not MODEL_COMPARISON_CSV.exists():
+        return empty
+
+    try:
+        df = pd.read_csv(MODEL_COMPARISON_CSV, low_memory=False)
+    except Exception as e:
+        print("[WARN] failed to read model comparison csv:", e)
+        return empty
+
+    if df.empty:
+        return empty
+
+    validated_rows: List[Dict[str, Any]] = []
+    offline_rows: List[Dict[str, Any]] = []
+
+    for _, r in df.iterrows():
+        venue = str(r.get("venue", "")).strip()
+        real_odds = str(r.get("real_odds_available", "")).strip().lower() in ("true", "1", "1.0")
+
+        if real_odds:
+            races_new = int(_safe_float(r.get("races_new", 0), 0.0))
+            valid_start = str(r.get("valid_start", "")).replace(".0", "", 1) if str(r.get("valid_start", "")).endswith(".0") else str(r.get("valid_start", ""))
+            valid_end = str(r.get("valid_end", "")).replace(".0", "", 1) if str(r.get("valid_end", "")).endswith(".0") else str(r.get("valid_end", ""))
+            validated_rows.append({
+                "venue": venue,
+                "valid_start": valid_start,
+                "valid_end": valid_end,
+                "races": races_new,
+                "roi_old_pct": _safe_float(r.get("roi_old_pct", 0.0), 0.0),
+                "roi_new_pct": _safe_float(r.get("roi_new_pct", 0.0), 0.0),
+                "roi_delta_pct": _safe_float(r.get("roi_delta_pct", 0.0), 0.0),
+                "low_confidence": races_new < 50,
+            })
+        else:
+            offline_rows.append({
+                "venue": venue,
+                "note": str(r.get("note", "")),
+                "offline_valid_logloss": _safe_float(r.get("offline_valid_logloss", 0.0), 0.0),
+                "offline_valid_auc": _safe_float(r.get("offline_valid_auc", 0.0), 0.0),
+            })
+
+    validated_rows.sort(key=lambda x: x["races"], reverse=True)
+    offline_rows.sort(key=lambda x: VENUE_ORDER.index(x["venue"]) if x["venue"] in VENUE_ORDER else 999)
+
+    return {
+        "available": True,
+        "validated_rows": validated_rows,
+        "offline_rows": offline_rows,
+        "validated_count": len(validated_rows),
+        "offline_count": len(offline_rows),
+    }
+
+
+PREDICTIONS_CSV_PATH = LOG_DIR / "predictions.csv"
+
+
+def _load_daily_crawl_status(recent_days: int = 14) -> Dict[str, Any]:
+    """
+    data/logs/predictions.csv を軽量(date, venueの2列のみ)に読み込み、
+    daily-prediction-crawl(全24会場を毎日自動巡回してmode=fullで予測ログを
+    残す仕組み)が実際に直近も動いているかを可視化する。
+    このFlaskアプリが動いている環境(ローカルMac or Render)ごとに
+    predictions.csvは別ファイルなので、この状況もその環境ごとに変わる点に注意。
+    """
+    empty = {"available": False}
+
+    if not PREDICTIONS_CSV_PATH.exists():
+        return empty
+
+    try:
+        df = pd.read_csv(PREDICTIONS_CSV_PATH, usecols=["date", "venue"], low_memory=False)
+    except Exception as e:
+        print("[WARN] failed to read predictions.csv for daily crawl status:", e)
+        return empty
+
+    if df.empty:
+        return empty
+
+    df["date"] = df["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
+    df["venue"] = df["venue"].astype(str).str.strip().map(normalize_venue_name)
+
+    total_rows = int(len(df))
+    latest_date = str(df["date"].max())
+
+    now_jst = datetime.now(ZoneInfo("Asia/Tokyo"))
+    today_str = now_jst.strftime("%Y%m%d")
+    cutoff_date = (now_jst - timedelta(days=recent_days)).strftime("%Y%m%d")
+
+    recent_df = df[df["date"] >= cutoff_date]
+    covered_venues = sorted(
+        {v for v in recent_df["venue"].unique().tolist() if v in VENUE_ORDER},
+        key=lambda v: VENUE_ORDER.index(v),
+    )
+    missing_venues = [v for v in VENUE_ORDER if v not in covered_venues]
+
+    return {
+        "available": True,
+        "total_rows": total_rows,
+        "latest_date": latest_date,
+        "today": today_str,
+        "recent_days": recent_days,
+        "covered_venue_count": len(covered_venues),
+        "total_venue_count": len(VENUE_ORDER),
+        "missing_venues": missing_venues,
+        "is_stale": latest_date < cutoff_date,
+    }
+
+
 @app.route("/sim")
 def sim_stats():
     df = _load_sim_light_df()
@@ -771,6 +892,8 @@ def sim_stats():
     conf_tier_breakdown = _build_conf_tier_breakdown(filtered)
     odds_band_breakdown = _build_odds_band_breakdown(filtered)
     kelly_bankroll = _load_kelly_bankroll_daily(start_date, end_date)
+    model_comparison = _load_model_comparison()
+    daily_crawl_status = _load_daily_crawl_status()
 
     return render_template(
         "sim_stats.html",
@@ -781,6 +904,8 @@ def sim_stats():
         conf_tier_breakdown=conf_tier_breakdown,
         odds_band_breakdown=odds_band_breakdown,
         kelly_bankroll=kelly_bankroll,
+        model_comparison=model_comparison,
+        daily_crawl_status=daily_crawl_status,
         start_date_html=_ymd_to_html_date(start_date),
         end_date_html=_ymd_to_html_date(end_date),
         available_min_html=_ymd_to_html_date(meta.get("available_min_date", "")),

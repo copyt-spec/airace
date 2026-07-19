@@ -59,6 +59,8 @@ data/logs/daily_update_run_logs/
 !data/logs/prediction_results_sim_1y_light.csv
 # 2026-07-18追加: /sim画面のKelly資産推移チャート用(軽量、日次集計済み)
 !data/logs/kelly_bankroll_daily.csv
+# 2026-07-19追加: /sim画面の全24会場モデル比較表用(軽量、24行程度)
+!data/logs/model_comparison_all_venues_holdout.csv
 
 # =========================
 # モデル

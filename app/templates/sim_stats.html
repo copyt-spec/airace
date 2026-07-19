@@ -316,6 +316,40 @@ th{
     </div>
   </div>
 
+  {% if daily_crawl_status.available %}
+  <section class="card" style="margin-bottom:20px;">
+    <h3 class="table-title">自動巡回(daily-prediction-crawl)の状況</h3>
+    <div class="meta" style="margin-top:0;">
+      このアプリが動いている環境(ローカル/Render)自身のpredictions.csvを見ています。環境ごとに別ファイルです。
+    </div>
+    <div class="stat-grid" style="grid-template-columns:repeat(4,1fr);margin-top:10px;">
+      <div class="mini">
+        <div class="k">最終ログ日</div>
+        <div class="v">{{ daily_crawl_status.latest_date }}</div>
+      </div>
+      <div class="mini">
+        <div class="k">総ログ行数</div>
+        <div class="v">{{ "{:,}".format(daily_crawl_status.total_rows) }}</div>
+      </div>
+      <div class="mini">
+        <div class="k">直近{{ daily_crawl_status.recent_days }}日でログがある会場</div>
+        <div class="v">{{ daily_crawl_status.covered_venue_count }} / {{ daily_crawl_status.total_venue_count }}</div>
+      </div>
+      <div class="mini">
+        <div class="k">状態</div>
+        <div class="v {% if daily_crawl_status.is_stale %}negative{% else %}positive{% endif %}">
+          {% if daily_crawl_status.is_stale %}停止中?(直近{{ daily_crawl_status.recent_days }}日ログ無し){% else %}稼働中{% endif %}
+        </div>
+      </div>
+    </div>
+    {% if daily_crawl_status.missing_venues %}
+    <div class="meta">
+      直近{{ daily_crawl_status.recent_days }}日でログが無い会場({{ daily_crawl_status.missing_venues|length }}): {{ daily_crawl_status.missing_venues|join("、") }}
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
+
   <section class="summary-grid">
     {% for s in sim_summary_cards %}
       <div class="summary-card">
@@ -468,6 +502,50 @@ th{
       </table>
     </div>
   </section>
+
+  {% if model_comparison.available %}
+  <section class="table-card" style="margin-bottom:22px;">
+    <h3 class="table-title">全24会場 モデル比較(旧モデル vs 選手成績+天候修正 新モデル、真のholdout期間)</h3>
+    <div class="meta" style="margin-top:0;margin-bottom:10px;">
+      日付分割で学習に一切使っていない期間だけを対象にした、実オッズ付きのROI比較です(学習データを採点してしまうリークは無し)。レース数50未満は参考値(サンプル不足)として薄く表示しています。
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>会場</th>
+            <th>holdout期間</th>
+            <th>レース数</th>
+            <th>旧モデルROI</th>
+            <th>新モデルROI</th>
+            <th>差分</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for r in model_comparison.validated_rows %}
+          <tr {% if r.low_confidence %}style="opacity:0.55;"{% endif %}>
+            <td>{{ r.venue }}{% if r.low_confidence %} <span style="font-size:11px;color:var(--muted);">(参考)</span>{% endif %}</td>
+            <td>{{ r.valid_start }}〜{{ r.valid_end }}</td>
+            <td>{{ r.races }}</td>
+            <td>{{ "%.2f"|format(r.roi_old_pct) }}%</td>
+            <td>{{ "%.2f"|format(r.roi_new_pct) }}%</td>
+            <td class="{% if r.roi_delta_pct >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "%+.2f"|format(r.roi_delta_pct) }}pt
+            </td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+
+    {% if model_comparison.offline_rows %}
+    <div class="meta" style="margin-top:14px;">
+      実オッズデータ不足でROI検証不可、オフラインのAUC/loglossのみ確認済み({{ model_comparison.offline_count }}会場):
+      {{ model_comparison.offline_rows|map(attribute="venue")|join("、") }}
+    </div>
+    {% endif %}
+  </section>
+  {% endif %}
 
   <section class="table-card">
     <h3 class="table-title">会場別詳細</h3>
