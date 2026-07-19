@@ -104,19 +104,17 @@ def _resolve_course(lane: int, bi_row: Dict[str, Any]) -> int:
 
 def _resolve_st(bi_row: Dict[str, Any], entry: Dict[str, Any]) -> float:
     """
-    2026-07-19変更: 従来はbeforeinfoの展示(直前の展示航走)STを最優先に
-    使っていたが、展開予想の「隊列の前後」判定には1回きりの展示走行より
-    選手の平均ST(全国平均ST、engine.racelist_enricherが出走表から
-    付与するentry["avg_st"])の方が安定した指標だという判断で優先順位を
-    入れ替えた。avg_stが取れない場合(新人選手等)は従来通り展示STに
-    フォールバックする。
+    2026-07-19変更: ユーザーから「展示ST(1回きりの展示航走タイム)は
+    全然当てにならないから無視していい」との指示を受け、beforeinfoの
+    展示ST(bi_row["st"])・start_timingは一切参照しないことにした。
+    選手ごとの平均ST(engine.racelist_enricherが出走表から付与する
+    entry["avg_st"])のみを使い、平均STが取れない選手(新人等)は
+    0.15を仮定する。
     """
-    for src, key in [(entry, "avg_st"), (bi_row, "st"), (entry, "start_timing")]:
-        if src:
-            v = _safe_float(src.get(key), None)
-            if v is not None and v > 0:
-                return v
-    return 0.17
+    v = _safe_float((entry or {}).get("avg_st"), None)
+    if v is not None and v > 0:
+        return v
+    return 0.15
 
 
 def _resolve_exhibit(bi_row: Dict[str, Any], entry: Dict[str, Any]) -> float:
@@ -167,7 +165,7 @@ def build_lane_context(
     # 出走表が不完全な場合でも描画は止めない(デフォルト値で埋める)
     for lane in range(1, 7):
         ctx.setdefault(lane, {
-            "lane": lane, "course": lane, "st": 0.17, "exhibit": 6.80,
+            "lane": lane, "course": lane, "st": 0.15, "exhibit": 6.80,
             "name": f"{lane}号艇", "win_rate": 0.0, "place_rate": 0.0,
         })
 
