@@ -574,7 +574,11 @@ def build_course_map_svgs(
             )
 
         # 艇(カプセル型。影→船体→番号の順で描画)
-        for rank_idx, lane in enumerate(order):
+        # SVGは後から描いた要素が上に重なるため、orderの並び(先頭=一番前の艇)の
+        # まま描画すると先頭艇が最初に描かれて一番下に埋もれ、後方の艇が前面に
+        # 重なって前後関係が逆に見えてしまう。先頭艇が最後に(=一番上に)描かれる
+        # よう逆順に描画する。
+        for rank_idx, lane in reversed(list(enumerate(order))):
             pos = phase_positions.get(key, {}).get(lane)
             if pos is None:
                 continue
