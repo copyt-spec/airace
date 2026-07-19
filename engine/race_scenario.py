@@ -103,7 +103,15 @@ def _resolve_course(lane: int, bi_row: Dict[str, Any]) -> int:
 
 
 def _resolve_st(bi_row: Dict[str, Any], entry: Dict[str, Any]) -> float:
-    for src, key in [(bi_row, "st"), (entry, "start_timing"), (entry, "avg_st")]:
+    """
+    2026-07-19変更: 従来はbeforeinfoの展示(直前の展示航走)STを最優先に
+    使っていたが、展開予想の「隊列の前後」判定には1回きりの展示走行より
+    選手の平均ST(全国平均ST、engine.racelist_enricherが出走表から
+    付与するentry["avg_st"])の方が安定した指標だという判断で優先順位を
+    入れ替えた。avg_stが取れない場合(新人選手等)は従来通り展示STに
+    フォールバックする。
+    """
+    for src, key in [(entry, "avg_st"), (bi_row, "st"), (entry, "start_timing")]:
         if src:
             v = _safe_float(src.get(key), None)
             if v is not None and v > 0:
