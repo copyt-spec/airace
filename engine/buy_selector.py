@@ -93,6 +93,29 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
 }
 
 
+# 2026-07-20追加: オッズ帯別の実績分析(全24会場、predictions.csv実ログ
+# 96万行超)で「10〜30倍の的中組がROIで一貫して上位、100倍超の大穴は
+# 弱含み」という傾向が見つかった。7月より前(学習期間、約63万行)で
+# ボーナス/ペナルティ幅をチューニングし、7月(真のholdout、約33万行)で
+# 検証した結果: ROI 78.73% -> 80.54%(+1.81pt)。買い点数(avg_points)は
+# 変えず、同じ予算内での並べ替えのみで効果が出ている。
+# 効果は小さいので過信しないこと(それでも100%には届かない)。
+# コース(艇番)別の傾向は7月より前とMuly月で真逆に出て再現性が無かったため
+# 見送った(venue_buy_config.optimized.json同様、ここには入れていない)。
+ODDS_BAND_BONUS_1030 = 0.15
+ODDS_BAND_PENALTY_100PLUS = -0.15
+
+
+def _odds_band_score_adj(odds: float) -> float:
+    if odds < 10:
+        return 0.0
+    if odds < 30:
+        return ODDS_BAND_BONUS_1030
+    if odds < 100:
+        return 0.0
+    return ODDS_BAND_PENALTY_100PLUS
+
+
 VENUE_NAMES = [
     "桐生", "戸田", "江戸川", "平和島", "多摩川", "浜名湖", "蒲郡", "常滑",
     "津", "三国", "びわこ", "住之江", "尼崎", "鳴門", "丸亀", "児島",
@@ -419,7 +442,8 @@ def select_best_bets(
         r["buy_score"] = (
             (r["prob_norm"] * cfg["weight_prob"]) +
             (r["ev_norm"] * cfg["weight_ev"]) +
-            (r["odds_norm"] * cfg["weight_odds"])
+            (r["odds_norm"] * cfg["weight_odds"]) +
+            _odds_band_score_adj(r["odds_raw"])
         )
 
     rows.sort(
