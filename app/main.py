@@ -17,7 +17,7 @@ except Exception as e:
     print("[IMPORT_ERROR]", e)
     RaceController = None  # type: ignore
 
-from engine.prediction_logger import build_prediction_rows, save_prediction_rows
+from engine.prediction_logger import build_prediction_rows, save_prediction_rows, save_lane_racer_no
 from engine.race_scenario import build_race_scenario
 from engine.venue_registry import (
     VENUE_MASTER,
@@ -552,6 +552,7 @@ def _save_prediction_log(
     probabilities: Dict[str, float],
     grouped_odds: Dict[str, Any],
     model_mode: str,
+    df120_rows: List[Dict[str, Any]] | None = None,
 ) -> None:
     try:
         prediction_rows = build_prediction_rows(
@@ -566,6 +567,25 @@ def _save_prediction_log(
         save_prediction_rows(prediction_rows)
     except Exception as log_e:
         print("[WARN] prediction log save failed:", log_e)
+
+    # 2026-07-21追加: 選手級別によるレースパターン分析を今後も継続できるよう、
+    # レーン別racer_noを別ファイルに記録する(predictions.csv本体には
+    # 列を足さない、理由はengine.prediction_logger.save_lane_racer_noを参照)。
+    try:
+        if df120_rows:
+            first_row = df120_rows[0]
+            lane_racer_no = {
+                lane: int(first_row.get(f"lane{lane}_racer_no", 0) or 0)
+                for lane in range(1, 7)
+            }
+            save_lane_racer_no(
+                date=date,
+                venue=venue,
+                race_no=race_no,
+                lane_racer_no=lane_racer_no,
+            )
+    except Exception as log_e:
+        print("[WARN] lane racer_no log save failed:", log_e)
 
 
 def _render_venue_page(venue_name: str):
@@ -655,6 +675,7 @@ def _render_venue_page(venue_name: str):
                 probabilities=probabilities,
                 grouped_odds=grouped_odds,
                 model_mode=resolved_model_mode,
+                df120_rows=bundle.get("df120_rows", []) or [],
             )
 
         races = _blank_races()

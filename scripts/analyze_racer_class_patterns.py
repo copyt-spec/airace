@@ -46,6 +46,9 @@ SPLIT_BY_VENUE_DIR = PROJECT_ROOT / "data" / "datasets" / "trifecta_train_by_ven
 RACER_STATS_PATH = PROJECT_ROOT / "data" / "masters" / "racer_stats.csv"
 LIGHT_CSV = PROJECT_ROOT / "data" / "logs" / "prediction_results_sim_1y_light.csv"
 RESULTS_CSV = PROJECT_ROOT / "data" / "logs" / "results.csv"
+# 2026-07-21追加: ライブ予測/バックフィル時にengine.prediction_logger.save_lane_racer_no
+# が書き出す、1レース=1行のレーン別racer_noログ(7月以降の分もここに溜まっていく)。
+LIVE_LANE_RACER_NO_CSV = PROJECT_ROOT / "data" / "logs" / "predictions_lane_racer_no.csv"
 
 GRADE_RANK = {"A1": 4, "A2": 3, "B1": 2, "B2": 1, "": 0}
 LANE_RACER_COLS = [f"lane{i}_racer_no" for i in range(1, 7)]
@@ -53,6 +56,13 @@ USECOLS = ["date", "race_no"] + LANE_RACER_COLS
 
 
 def load_race_lane_racer_no() -> pd.DataFrame:
+    """
+    学習データセット(7月より前)由来のレーン別racer_noに加え、
+    engine.prediction_logger.save_lane_racer_noが継続的に書き足している
+    ライブ/バックフィル分(predictions_lane_racer_no.csv、7月以降も蓄積中)を
+    合わせて返す。同じレースが両方にあれば学習データセット側を優先する
+    (由来がはっきりしているため)。
+    """
     files = sorted(glob.glob(str(SPLIT_BY_VENUE_DIR / "*.csv")))
     all_races = []
     for fp in files:
@@ -62,7 +72,20 @@ def load_race_lane_racer_no() -> pd.DataFrame:
         races = df.drop_duplicates(subset=["date", "race_no"]).copy()
         races["venue"] = venue
         all_races.append(races)
-    return pd.concat(all_races, ignore_index=True)
+    races = pd.concat(all_races, ignore_index=True)
+
+    if LIVE_LANE_RACER_NO_CSV.exists():
+        live = pd.read_csv(LIVE_LANE_RACER_NO_CSV, low_memory=False)
+        live["date"] = live["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
+        live["race_no"] = pd.to_numeric(live["race_no"], errors="coerce").fillna(0).astype(int)
+        live = live[["date", "venue", "race_no"] + LANE_RACER_COLS].copy()
+        combined = pd.concat([races, live], ignore_index=True)
+        combined = combined.drop_duplicates(subset=["date", "venue", "race_no"], keep="first")
+        print(f"(ライブ/バックフィルログから{len(live)}レース分を追加、"
+              f"重複除去後の合計は{len(combined)}レース)")
+        return combined.reset_index(drop=True)
+
+    return races
 
 
 def load_grade_map() -> Dict[int, str]:

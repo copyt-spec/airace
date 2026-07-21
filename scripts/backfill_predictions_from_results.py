@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from app.controller import RaceController  # noqa: E402
-from engine.prediction_logger import build_prediction_rows  # noqa: E402
+from engine.prediction_logger import build_prediction_rows, save_lane_racer_no  # noqa: E402
 
 
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
@@ -246,6 +246,22 @@ def main() -> None:
             )
 
             _append_rows_csv(predictions_path, pred_rows)
+
+            # 2026-07-21追加: 選手級別パターン分析(scripts/analyze_racer_class_patterns.py)
+            # を今後のバックフィル分でも継続できるよう、レーン別racer_noを別ログに記録する。
+            try:
+                df120_rows = bundle.get("df120_rows", []) or []
+                if df120_rows:
+                    first_row = df120_rows[0]
+                    lane_racer_no = {
+                        lane: int(first_row.get(f"lane{lane}_racer_no", 0) or 0)
+                        for lane in range(1, 7)
+                    }
+                    save_lane_racer_no(
+                        date=date, venue=venue, race_no=race_no, lane_racer_no=lane_racer_no,
+                    )
+            except Exception as log_e:
+                print(f"[WARN] lane racer_no log save failed: {date} {venue} {race_no}R -> {log_e}")
 
             print(f"[{done}/{len(targets)}] OK   {date} {venue} {race_no}R rows={len(pred_rows)}")
             success += 1
