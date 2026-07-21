@@ -39,6 +39,11 @@ if str(PROJECT_ROOT) not in sys.path:
 from engine.venue_registry import VENUE_ORDER, normalize_venue_name  # noqa: E402
 DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
 RACER_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "racer_point_in_time_stats.csv"
+# 2026-07-21追加: 選手の直近の調子(recent5_*)とモーターの直近の調子
+# (motor_recent8_*)。scripts/analyze_racer_recent_form.py /
+# analyze_motor_recent_form.py で、選手の通算実力とは別に将来の成績を
+# 追加的に予測することを確認済み(いずれも有意)。
+MOTOR_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "motor_point_in_time_stats.csv"
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
 
 
@@ -104,6 +109,22 @@ def _load_racer_stats() -> pd.DataFrame:
     stats = pd.read_csv(RACER_STATS_PATH, low_memory=False)
     stats["date"] = stats["date"].astype(str).str.zfill(8)
     stats["racer_no"] = pd.to_numeric(stats["racer_no"], errors="coerce").fillna(0).astype(int)
+    return stats
+
+
+def _load_motor_stats() -> pd.DataFrame:
+    """
+    2026-07-21追加: (venue, motor, date)単位のリーク無し直近成績。
+    無い場合(build_motor_point_in_time_stats.py未実行)は空DataFrameを返し、
+    呼び出し側でモーター特徴量を全てNaN(→0埋め)にフォールバックする。
+    """
+    if not MOTOR_STATS_PATH.exists():
+        print(f"[WARN] {MOTOR_STATS_PATH} が見つかりません。モーター特徴量は空になります。"
+              "先に scripts/build_motor_point_in_time_stats.py を実行してください。")
+        return pd.DataFrame()
+    stats = pd.read_csv(MOTOR_STATS_PATH, low_memory=False)
+    stats["date"] = stats["date"].astype(str).str.zfill(8)
+    stats["motor"] = pd.to_numeric(stats["motor"], errors="coerce").fillna(0).astype(int)
     return stats
 
 
@@ -235,6 +256,13 @@ def _add_racer_stats_block(df: pd.DataFrame, racer_stats: pd.DataFrame) -> pd.Da
         out[f"lane{lane}_win_rate_prior"] = joined["win_rate_prior"].to_numpy()
         out[f"lane{lane}_place_rate_prior"] = joined["place_rate_prior"].to_numpy()
         out[f"lane{lane}_avg_st_prior"] = joined["avg_st_prior"].to_numpy()
+        # 2026-07-21追加: 選手の直近の調子(ホットハンド、analyze_racer_recent_form.py参照)
+        if "recent5_place_rate_prior" in joined.columns:
+            out[f"lane{lane}_recent5_races_prior"] = joined["recent5_races_prior"].to_numpy()
+            out[f"lane{lane}_recent5_place_rate_prior"] = joined["recent5_place_rate_prior"].to_numpy()
+        else:
+            out[f"lane{lane}_recent5_races_prior"] = np.nan
+            out[f"lane{lane}_recent5_place_rate_prior"] = np.nan
 
         # そのレースで実際に走ったコース(1-6)別の複勝率・平均STを選ぶ
         course_vals = pd.to_numeric(out[course_col], errors="coerce").fillna(0).astype(int)
@@ -257,10 +285,52 @@ def _add_racer_stats_block(df: pd.DataFrame, racer_stats: pd.DataFrame) -> pd.Da
         ("second", "combo_second_lane"),
         ("third", "combo_third_lane"),
     ]:
-        for feat in [
-            "races_prior", "win_rate_prior", "place_rate_prior",
-            "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
-        ]:
+        for feat in RACER_STATS_FEATURE_SUFFIXES:
+            out[f"{pos}_{feat}"] = np.nan
+            for lane in range(1, 7):
+                mask = out[pos_name] == lane
+                out.loc[mask, f"{pos}_{feat}"] = out.loc[mask, f"lane{lane}_{feat}"]
+
+    return out
+
+
+def _add_motor_stats_block(df: pd.DataFrame, motor_stats: pd.DataFrame) -> pd.DataFrame:
+    """
+    2026-07-21追加: (venue, lane{n}_motor, date)をキーに、リーク無しの
+    モーター直近成績(motor_recent8_*)を結合する。scripts/analyze_motor_recent_form.py
+    で「選手の実力とは別に将来を予測する」ことを確認済み。
+
+    motor_stats が空(build_motor_point_in_time_stats.py未実行)の場合は
+    全レーンNaN(学習時は0埋め)にフォールバックする。
+    """
+    out = df.copy()
+    out["date"] = out["date"].astype(str).str.zfill(8)
+
+    if motor_stats is None or motor_stats.empty:
+        for lane in range(1, 7):
+            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                out[f"lane{lane}_{suf}"] = np.nan
+    else:
+        for lane in range(1, 7):
+            motor_col = f"lane{lane}_motor"
+
+            key_df = out[["venue", motor_col, "date"]].copy()
+            key_df.columns = ["venue", "motor", "date"]
+            key_df["motor"] = pd.to_numeric(key_df["motor"], errors="coerce").fillna(0).astype(int)
+
+            joined = key_df.merge(motor_stats, on=["venue", "motor", "date"], how="left")
+
+            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                col = f"motor_{suf}"
+                out[f"lane{lane}_motor_{suf}"] = joined[col].to_numpy() if col in joined.columns else np.nan
+
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+            feat = f"motor_{suf}"
             out[f"{pos}_{feat}"] = np.nan
             for lane in range(1, 7):
                 mask = out[pos_name] == lane
@@ -272,6 +342,11 @@ def _add_racer_stats_block(df: pd.DataFrame, racer_stats: pd.DataFrame) -> pd.Da
 RACER_STATS_FEATURE_SUFFIXES = [
     "races_prior", "win_rate_prior", "place_rate_prior",
     "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
+    "recent5_races_prior", "recent5_place_rate_prior",
+]
+
+MOTOR_STATS_FEATURE_SUFFIXES = [
+    "recent8_races_prior", "recent8_place_rate_prior",
 ]
 
 
@@ -306,9 +381,13 @@ def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool) -> List[str]:
         for lane in range(1, 7):
             for suf in RACER_STATS_FEATURE_SUFFIXES:
                 candidate_cols.append(f"lane{lane}_{suf}")
+            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                candidate_cols.append(f"lane{lane}_motor_{suf}")
         for pos in ["first", "second", "third"]:
             for suf in RACER_STATS_FEATURE_SUFFIXES:
                 candidate_cols.append(f"{pos}_{suf}")
+            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                candidate_cols.append(f"{pos}_motor_{suf}")
 
     return [c for c in candidate_cols if c in df.columns]
 
@@ -355,9 +434,14 @@ def _split_by_date(df: pd.DataFrame, test_size: float) -> Tuple[pd.DataFrame, pd
     return train_df, valid_df
 
 
-def _build_save_paths(model_dir: Path, venue: str, weight_suffix: str = "") -> Tuple[Path, Path]:
-    model_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats{weight_suffix}.cbm"
-    meta_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats{weight_suffix}_meta.json"
+def _build_save_paths(
+    model_dir: Path, venue: str, weight_suffix: str = "", model_suffix: str = ""
+) -> Tuple[Path, Path]:
+    # model_suffix: 2026-07-21追加。選手の直近の調子/モーター直近の調子を
+    # 追加した実験版を、検証が済むまで本番の"_with_racer_stats"モデルの
+    # 上書きから守るためのもの(例: "_formv2")。空文字なら従来通り。
+    model_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats{model_suffix}{weight_suffix}.cbm"
+    meta_path = model_dir / f"trifecta_binary_catboost_{venue}_with_racer_stats{model_suffix}{weight_suffix}_meta.json"
     return model_path, meta_path
 
 
@@ -406,6 +490,8 @@ def _train_one_venue(
     skip_baseline_rerun: bool = False,
     feature_weight_targets: List[str] | None = None,
     feature_weight_multiplier: float = 1.0,
+    motor_stats: pd.DataFrame | None = None,
+    model_suffix: str = "",
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -419,6 +505,7 @@ def _train_one_venue(
         print("max date       :", str(df["date"].astype(str).max()))
 
     df = _add_racer_stats_block(df, racer_stats)
+    df = _add_motor_stats_block(df, motor_stats if motor_stats is not None else pd.DataFrame())
     df["date"] = df["date"].astype(str)
 
     train_raw, valid_raw = _split_by_date(df, test_size)
@@ -496,13 +583,18 @@ def _train_one_venue(
                 # 重み実験のモデルは別名で保存する(例: _w4.0x)
                 weight_suffix = f"_w{feature_weight_multiplier:g}x"
 
-            model_path, meta_path = _build_save_paths(MODEL_DIR, venue, weight_suffix=weight_suffix)
+            model_path, meta_path = _build_save_paths(
+                MODEL_DIR, venue, weight_suffix=weight_suffix, model_suffix=model_suffix
+            )
             model.save_model(str(model_path))
 
             meta = {
                 "venue": venue,
                 "model_type": "catboost_binary",
                 "with_racer_stats": True,
+                "with_recent_form_features": any("recent5_place_rate_prior" in c for c in feature_cols),
+                "with_motor_stats": any("motor_recent8_place_rate_prior" in c for c in feature_cols),
+                "model_suffix": model_suffix,
                 "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
                 "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
                 "dataset_path": str(src),
@@ -553,6 +645,12 @@ def main() -> None:
              "1.0なら無効(通常学習と同じ)。'黄金比'は解析的に求まらないため、"
              "複数の値で学習しscripts/sweep_racer_stats_weight.pyで比較する想定。",
     )
+    parser.add_argument(
+        "--model_suffix", default="",
+        help="保存するモデルファイル名に追加するsuffix(例: _formv2)。"
+             "検証用に本番の_with_racer_stats.cbmを上書きせず別名で保存したい場合に指定する。"
+             "未指定なら従来と完全に同じファイル名(本番ファイルを上書きするので注意)。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -560,6 +658,8 @@ def main() -> None:
     src = Path(args.src)
     racer_stats = _load_racer_stats()
     print("racer_stats rows:", len(racer_stats))
+    motor_stats = _load_motor_stats()
+    print("motor_stats rows:", len(motor_stats))
 
     if args.all:
         venues = list(VENUE_ORDER)
@@ -582,6 +682,8 @@ def main() -> None:
                 skip_baseline_rerun=skip_baseline_rerun,
                 feature_weight_targets=feature_weight_targets,
                 feature_weight_multiplier=args.feature_weight_multiplier,
+                motor_stats=motor_stats,
+                model_suffix=args.model_suffix,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

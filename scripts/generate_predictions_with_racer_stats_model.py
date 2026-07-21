@@ -36,7 +36,9 @@ from scripts.train_binary_catboost_per_venue_with_racer_stats import (  # noqa: 
     SPLIT_BY_VENUE_DIR,
     _add_feature_block,
     _add_racer_stats_block,
+    _add_motor_stats_block,
     _load_racer_stats,
+    _load_motor_stats,
 )
 DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
 MODEL_DIR = PROJECT_ROOT / "data" / "models"
@@ -126,6 +128,11 @@ def generate_for_venue(
     print("GENERATE PREDICTIONS:", venue, f"(model_suffix={model_suffix!r})" if model_suffix else "")
     print("=" * 80)
 
+    if not out_suffix and model_suffix:
+        # model_suffix指定時、out_suffix未指定なら自動でmodel_suffixを使う。
+        # 本番モデルの比較ファイル(predictions_with_racer_stats_{venue}.csv)を
+        # 検証用モデルの結果で誤って上書きしないためのガード。
+        out_suffix = model_suffix
     out_path = PROJECT_ROOT / "data" / "logs" / f"predictions_with_racer_stats_{venue}{out_suffix}.csv"
 
     def _skip(reason: str) -> None:
@@ -185,6 +192,8 @@ def generate_for_venue(
 
     racer_stats = _load_racer_stats()
     df = _add_racer_stats_block(df, racer_stats)
+    motor_stats = _load_motor_stats()
+    df = _add_motor_stats_block(df, motor_stats)
     df = _add_feature_block(df)
 
     feature_cols = list(model.feature_names_)
@@ -233,6 +242,13 @@ def main() -> None:
         help="危険: holdout期間に絞らず、predictions.csvにある全期間を対象にする"
              "(学習データを含みROI検証としては無効。オフライン確認用途のみ)",
     )
+    parser.add_argument(
+        "--model_suffix", default="",
+        help="評価したいモデルファイルのsuffix(例: _formv2)。"
+             "train_binary_catboost_per_venue_with_racer_stats.pyの--model_suffixで"
+             "保存した検証用モデル(本番の_with_racer_stats.cbmとは別名)を"
+             "読み込んで評価したい場合に指定する。未指定なら本番モデルを評価する。",
+    )
     args = parser.parse_args()
 
     if args.all:
@@ -250,6 +266,7 @@ def main() -> None:
                 min_races=args.min_races,
                 test_size=args.test_size,
                 full_range=args.full_range,
+                model_suffix=args.model_suffix,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

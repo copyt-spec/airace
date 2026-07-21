@@ -11,10 +11,16 @@ import pandas as pd
 from engine.venue_registry import VENUE_ORDER, normalize_venue_name
 
 RACER_STATS_PATH = Path("data/datasets/racer_point_in_time_stats.csv")
+MOTOR_STATS_PATH = Path("data/datasets/motor_point_in_time_stats.csv")
 
 RACER_STATS_FEATURE_SUFFIXES = [
     "races_prior", "win_rate_prior", "place_rate_prior",
     "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
+    "recent5_races_prior", "recent5_place_rate_prior",
+]
+
+MOTOR_STATS_FEATURE_SUFFIXES = [
+    "recent8_races_prior", "recent8_place_rate_prior",
 ]
 
 
@@ -65,12 +71,23 @@ class BinaryCatBoostVenueModel:
         if self.use_racer_stats:
             self._reload_racer_stats_if_changed()
 
+        # モーター直近成績特徴量(2026-07-21追加)。racer_statsと同じ理由で、
+        # (venue, motor)ごとに「持っているデータの中で一番新しい行」を
+        # 現時点の推定値として使う。motor_point_in_time_stats.csvが無ければ
+        # 空のまま(その場合はwith_motor_stats対応モデルでも0埋めで動く)。
+        self.motor_stats_latest: pd.DataFrame | None = None
+        self._motor_stats_mtime: float = 0.0
+        if self.use_racer_stats:
+            self._reload_motor_stats_if_changed()
+
         if self.debug:
             print("[LOADED_MODELS]", list(self.models.keys()))
             print("[MODEL_VARIANT]", self.model_variant)
             print("[FALLBACK_VENUE]", self.fallback_venue)
             if self.racer_stats_latest is not None:
                 print("[RACER_STATS_LOADED]", len(self.racer_stats_latest), "racers")
+            if self.motor_stats_latest is not None:
+                print("[MOTOR_STATS_LOADED]", len(self.motor_stats_latest), "venue x motor pairs")
 
     def _load_venue_model(self, venue: str):
         """with_racer_stats モデルを優先して読み込み、無ければ with_racer_no にフォールバックする。"""
@@ -135,6 +152,42 @@ class BinaryCatBoostVenueModel:
 
         self.racer_stats_latest = self._load_latest_racer_stats()
         self._racer_stats_mtime = mtime
+
+    def _load_latest_motor_stats(self) -> pd.DataFrame:
+        if not MOTOR_STATS_PATH.exists():
+            if self.debug:
+                print(f"[WARN] motor stats file not found: {MOTOR_STATS_PATH}. motor特徴量は0で埋められます。")
+            return pd.DataFrame()
+
+        stats = pd.read_csv(MOTOR_STATS_PATH, low_memory=False)
+        stats["date"] = stats["date"].astype(str).str.zfill(8)
+        stats["motor"] = pd.to_numeric(stats["motor"], errors="coerce").fillna(0).astype(int)
+
+        # (venue, motor)ごとに最新日付の行だけを残す(直近実績を「現時点の推定値」として使う)
+        stats = stats.sort_values(["venue", "motor", "date"])
+        latest = stats.groupby(["venue", "motor"], as_index=False).tail(1)
+        return latest.set_index(["venue", "motor"])
+
+    def _reload_motor_stats_if_changed(self) -> None:
+        """motor_point_in_time_stats.csvの更新時刻をチェックし、変わっていれば再読み込みする。
+
+        _reload_racer_stats_if_changed()と同じ設計(mtimeのみの軽量チェック)。
+        """
+        try:
+            if not MOTOR_STATS_PATH.exists():
+                return
+            mtime = MOTOR_STATS_PATH.stat().st_mtime
+        except Exception:
+            return
+
+        if mtime == self._motor_stats_mtime and self.motor_stats_latest is not None:
+            return
+
+        if self.debug:
+            print(f"[RELOAD_MOTOR_STATS] mtime changed ({self._motor_stats_mtime} -> {mtime}), reloading")
+
+        self.motor_stats_latest = self._load_latest_motor_stats()
+        self._motor_stats_mtime = mtime
 
     def _safe_float(self, v: Any, default: float = 0.0) -> float:
         try:
@@ -306,6 +359,12 @@ class BinaryCatBoostVenueModel:
                 out[f"lane{lane}_avg_st_prior"] = [
                     (r["avg_st_prior"] if r is not None else np.nan) for r in joined
                 ]
+                out[f"lane{lane}_recent5_races_prior"] = [
+                    (r.get("recent5_races_prior", np.nan) if r is not None else np.nan) for r in joined
+                ]
+                out[f"lane{lane}_recent5_place_rate_prior"] = [
+                    (r.get("recent5_place_rate_prior", np.nan) if r is not None else np.nan) for r in joined
+                ]
 
                 course_vals = pd.to_numeric(out.get(course_col, 0), errors="coerce").fillna(0).astype(int)
                 place_rate_by_course = []
@@ -336,6 +395,42 @@ class BinaryCatBoostVenueModel:
                 for lane in range(1, 7):
                     mask = out[pos_name] == lane
                     out.loc[mask, f"{pos}_{suf}"] = out.loc[mask, f"lane{lane}_{suf}"]
+
+        return out
+
+    def _add_motor_stats_block_live(self, df: pd.DataFrame, venue_name: str) -> pd.DataFrame:
+        out = df.copy()
+        venue_name = self._normalize_venue_name(venue_name)
+
+        if self.motor_stats_latest is None or self.motor_stats_latest.empty:
+            for lane in range(1, 7):
+                for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                    out[f"lane{lane}_motor_{suf}"] = np.nan
+        else:
+            for lane in range(1, 7):
+                motor_col = f"lane{lane}_motor"
+                motor_nos = pd.to_numeric(out.get(motor_col, 0), errors="coerce").fillna(0).astype(int)
+                joined = motor_nos.map(
+                    lambda mno: self.motor_stats_latest.loc[(venue_name, mno)]
+                    if (venue_name, mno) in self.motor_stats_latest.index else None
+                )
+                for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                    col = f"motor_{suf}"
+                    out[f"lane{lane}_motor_{suf}"] = [
+                        (r.get(col, np.nan) if r is not None else np.nan) for r in joined
+                    ]
+
+        for pos, pos_name in [
+            ("first", "combo_first_lane"),
+            ("second", "combo_second_lane"),
+            ("third", "combo_third_lane"),
+        ]:
+            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                feat = f"motor_{suf}"
+                out[f"{pos}_{feat}"] = np.nan
+                for lane in range(1, 7):
+                    mask = out[pos_name] == lane
+                    out.loc[mask, f"{pos}_{feat}"] = out.loc[mask, f"lane{lane}_{feat}"]
 
         return out
 
@@ -372,7 +467,9 @@ class BinaryCatBoostVenueModel:
         if variant == "with_racer_stats":
             if self.use_racer_stats:
                 self._reload_racer_stats_if_changed()
+                self._reload_motor_stats_if_changed()
             work = self._add_racer_stats_block_live(work)
+            work = self._add_motor_stats_block_live(work, requested_venue)
         x = self._prepare_x(work, feature_cols)
 
         raw_scores = model.predict(x, prediction_type="RawFormulaVal")

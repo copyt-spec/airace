@@ -9,13 +9,22 @@ data/datasets/racer_race_history.csv (選手×レースのファクトテーブ�
 
 出力: data/datasets/racer_point_in_time_stats.csv
   racer_no, date, races_prior, win_rate_prior, place_rate_prior, avg_st_prior,
-  course{1-6}_races_prior, course{1-6}_place_rate_prior, course{1-6}_avg_st_prior
+  course{1-6}_races_prior, course{1-6}_place_rate_prior, course{1-6}_avg_st_prior,
+  recent5_races_prior, recent5_place_rate_prior
 
 date は「この日"から"適用される、この日より前の実績に基づく統計」という意味。
 学習データにmerge_asof(direction='backward', 厳密にはこの日"以前"の最新の値)で
 結合すればよい。ただし当日分がリークしないよう、学習データ側では
 「同日は対象外」にするため、このファイルの date は「対象レースの日付」そのものにして、
 値は必ずその日より前の実績のみで計算している。
+
+2026-07-21追加: recent5_place_rate_prior(直近5走の複勝率、当日を含む前より前)。
+scripts/analyze_racer_recent_form.py で検証した「選手の直近の調子(ホットハンド
+効果)」を、実際にモデルの特徴量として使えるようにするためのもの。
+races_prior等(通算の累積)とは別に、選手ごとに日付・会場・レース番号順で
+シャッフルせずに並べ、shift(1)で当該レースを含まない直近5走だけの複勝率を
+rolling計算し、各(racer_no, date)の「その日最初のレースより前」の値を
+その日の代表値として使う(同日内の後半レースの影響を混ぜない、保守的な設計)。
 """
 
 from pathlib import Path
@@ -110,12 +119,37 @@ def main() -> None:
         daily[f"course{c}_place_rate_prior"] = np.where(races_prior > 0, top3_prior / races_prior, np.nan)
         daily[f"course{c}_avg_st_prior"] = np.where(st_count_prior > 0, st_sum_prior / st_count_prior, np.nan)
 
-    keep_cols = ["racer_no", "date", "races_prior", "win_rate_prior", "place_rate_prior", "avg_st_prior"]
+    # ---- 直近5走の複勝率(ホットハンド特徴量、リーク無し) ----
+    # レース単位(日付集約前)で選手ごとに時系列ソートし、shift(1)で当該レースを
+    # 除いた直近5走のrollingを計算。その後、各(racer_no, date)の「その日最初の
+    # 行」の値を採用することで、同日内の後半レースの影響を混ぜずに
+    # 「その日が始まる前の直近5走」を代表値として扱う(他の*_priorと同じ設計思想)。
+    race_level = df.sort_values(["racer_no", "date", "venue", "race_no"]).reset_index(drop=True)
+    gr = race_level.groupby("racer_no")["is_top3"]
+    race_level["recent5_place_rate_prior"] = gr.transform(
+        lambda s: s.shift(1).rolling(5, min_periods=5).mean()
+    )
+    race_level["recent5_races_prior"] = gr.transform(
+        lambda s: s.shift(1).expanding().count()
+    ).clip(upper=5)
+
+    recent5_daily = (
+        race_level.groupby(["racer_no", "date"], as_index=False)
+        .first()[["racer_no", "date", "recent5_races_prior", "recent5_place_rate_prior"]]
+    )
+    daily = daily.merge(recent5_daily, on=["racer_no", "date"], how="left")
+
+    keep_cols = [
+        "racer_no", "date", "races_prior", "win_rate_prior", "place_rate_prior", "avg_st_prior",
+        "recent5_races_prior", "recent5_place_rate_prior",
+    ]
     for c in range(1, 7):
         keep_cols += [f"course{c}_races_prior", f"course{c}_place_rate_prior", f"course{c}_avg_st_prior"]
 
     out = daily[keep_cols].copy()
-    out.to_csv(OUT_CSV, index=False, encoding="utf-8-sig")
+    tmp_path = OUT_CSV.with_suffix(".csv.tmp")
+    out.to_csv(tmp_path, index=False, encoding="utf-8-sig")
+    tmp_path.replace(OUT_CSV)  # atomic: never leaves OUT_CSV truncated if killed mid-write
 
     print("saved:", OUT_CSV)
     print("rows:", len(out))
