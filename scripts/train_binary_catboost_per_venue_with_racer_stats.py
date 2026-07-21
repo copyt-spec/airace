@@ -339,18 +339,22 @@ def _add_motor_stats_block(df: pd.DataFrame, motor_stats: pd.DataFrame) -> pd.Da
     return out
 
 
-RACER_STATS_FEATURE_SUFFIXES = [
+RACER_STATS_BASE_FEATURE_SUFFIXES = [
     "races_prior", "win_rate_prior", "place_rate_prior",
     "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
+]
+RACER_STATS_FORM_FEATURE_SUFFIXES = [
     "recent5_races_prior", "recent5_place_rate_prior",
 ]
+# 後方互換: 既存コードがRACER_STATS_FEATURE_SUFFIXES(全部入り)を参照している箇所向け
+RACER_STATS_FEATURE_SUFFIXES = RACER_STATS_BASE_FEATURE_SUFFIXES + RACER_STATS_FORM_FEATURE_SUFFIXES
 
 MOTOR_STATS_FEATURE_SUFFIXES = [
     "recent8_races_prior", "recent8_place_rate_prior",
 ]
 
 
-def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool) -> List[str]:
+def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool, include_form_features: bool = True) -> List[str]:
     candidate_cols = [
         "combo_first_lane", "combo_second_lane", "combo_third_lane",
         "wind_dir_code", "weather_code", "wind_speed_mps", "wave_cm",
@@ -378,26 +382,33 @@ def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool) -> List[str]:
     ]
 
     if with_racer_stats:
+        racer_suffixes = RACER_STATS_BASE_FEATURE_SUFFIXES + (
+            RACER_STATS_FORM_FEATURE_SUFFIXES if include_form_features else []
+        )
         for lane in range(1, 7):
-            for suf in RACER_STATS_FEATURE_SUFFIXES:
+            for suf in racer_suffixes:
                 candidate_cols.append(f"lane{lane}_{suf}")
-            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
-                candidate_cols.append(f"lane{lane}_motor_{suf}")
+            if include_form_features:
+                for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                    candidate_cols.append(f"lane{lane}_motor_{suf}")
         for pos in ["first", "second", "third"]:
-            for suf in RACER_STATS_FEATURE_SUFFIXES:
+            for suf in racer_suffixes:
                 candidate_cols.append(f"{pos}_{suf}")
-            for suf in MOTOR_STATS_FEATURE_SUFFIXES:
-                candidate_cols.append(f"{pos}_motor_{suf}")
+            if include_form_features:
+                for suf in MOTOR_STATS_FEATURE_SUFFIXES:
+                    candidate_cols.append(f"{pos}_motor_{suf}")
 
     return [c for c in candidate_cols if c in df.columns]
 
 
-def _prepare_xy(df: pd.DataFrame, with_racer_stats: bool) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
+def _prepare_xy(
+    df: pd.DataFrame, with_racer_stats: bool, include_form_features: bool = True
+) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     if "y" not in df.columns:
         raise ValueError("dataset must contain y column")
 
     work = _add_feature_block(df.copy())
-    feature_cols = _get_feature_cols(work, with_racer_stats)
+    feature_cols = _get_feature_cols(work, with_racer_stats, include_form_features=include_form_features)
     if not feature_cols:
         raise RuntimeError("no feature columns found")
 
@@ -492,6 +503,7 @@ def _train_one_venue(
     feature_weight_multiplier: float = 1.0,
     motor_stats: pd.DataFrame | None = None,
     model_suffix: str = "",
+    include_form_features: bool = True,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -517,8 +529,12 @@ def _train_one_venue(
     baseline_metrics = None
 
     for with_racer_stats, suffix in variants:
-        x_train, y_train, feature_cols = _prepare_xy(train_raw, with_racer_stats)
-        x_valid, y_valid, _ = _prepare_xy(valid_raw, with_racer_stats)
+        x_train, y_train, feature_cols = _prepare_xy(
+            train_raw, with_racer_stats, include_form_features=include_form_features
+        )
+        x_valid, y_valid, _ = _prepare_xy(
+            valid_raw, with_racer_stats, include_form_features=include_form_features
+        )
 
         pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
         neg_count = int((y_train == 0).sum() + (y_valid == 0).sum())
@@ -651,6 +667,15 @@ def main() -> None:
              "検証用に本番の_with_racer_stats.cbmを上書きせず別名で保存したい場合に指定する。"
              "未指定なら従来と完全に同じファイル名(本番ファイルを上書きするので注意)。",
     )
+    parser.add_argument(
+        "--disable_form_features", action="store_true",
+        help="選手の直近5走複勝率・モーターの直近8走複勝率(2026-07-21追加の新特徴量)を"
+             "学習から除外する。より長い--test_sizeで『新特徴量を追加する前の本番モデル相当』を"
+             "同じ日付分割・同じ現在のデータセットで再現し、公平にROI比較したい場合に使う"
+             "(本番の_with_racer_statsモデルは古いtest_sizeで学習済みのため、単にgenerate_predictions側の"
+             "test_sizeだけを大きくすると学習済み期間をholdoutとして採点してしまいリークする。"
+             "このフラグ+同じ--test_sizeで両方を再学習すれば、リーク無しで長い期間を比較できる)。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -684,6 +709,7 @@ def main() -> None:
                 feature_weight_multiplier=args.feature_weight_multiplier,
                 motor_stats=motor_stats,
                 model_suffix=args.model_suffix,
+                include_form_features=not args.disable_form_features,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")
