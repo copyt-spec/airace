@@ -33,9 +33,14 @@ def _normalize_date(s: pd.Series) -> pd.Series:
     return s.astype(str).str.replace(".0", "", regex=False).str.zfill(8)
 
 
-def load_data(start_date: str = "", end_date: str = "") -> pd.DataFrame:
-    pred = pd.read_csv(PREDICTIONS_CSV, low_memory=False)
-    res = pd.read_csv(RESULTS_CSV, low_memory=False)
+def load_data(
+    start_date: str = "",
+    end_date: str = "",
+    predictions_path: Path | None = None,
+    results_path: Path | None = None,
+) -> pd.DataFrame:
+    pred = pd.read_csv(predictions_path or PREDICTIONS_CSV, low_memory=False)
+    res = pd.read_csv(results_path or RESULTS_CSV, low_memory=False)
 
     pred["date"] = _normalize_date(pred["date"])
     res["date"] = _normalize_date(res["date"])

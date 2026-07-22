@@ -20,6 +20,7 @@ date順にレースを並べ、各レースで:
 を両方計算し、レース単位・日次・累計で比較する。
 """
 
+import argparse
 import sys
 from pathlib import Path
 from typing import Any, Dict, List
@@ -175,14 +176,31 @@ def summarize(sim_df: pd.DataFrame, initial_bankroll: int = INITIAL_BANKROLL) ->
 
 
 if __name__ == "__main__":
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--predictions", default="",
+        help="入力predictions(未指定ならdata/logs/predictions.csv。"
+             "新モデルの合成データ(scripts/build_new_model_predictions_snapshot.py)"
+             "等、別ファイルを指定することもできる)。",
+    )
+    parser.add_argument("--results", default="", help="未指定ならdata/logs/results.csv")
+    parser.add_argument(
+        "--out", default=str(PROJECT_ROOT / "data" / "logs" / "kelly_sizing_backtest.csv"),
+        help="出力先(デフォルトは/simが読む本物のkelly_sizing_backtest.csvを上書きする)。",
+    )
+    args = parser.parse_args()
+
     print("loading data...")
-    df = load_data()
+    df = load_data(
+        predictions_path=Path(args.predictions).expanduser().resolve() if args.predictions else None,
+        results_path=Path(args.results).expanduser().resolve() if args.results else None,
+    )
     print("rows:", len(df), "races:", df.drop_duplicates(["date", "venue", "race_no"]).shape[0])
 
     print("\nrunning bankroll simulation...")
     sim_df = simulate(df)
 
-    out_path = PROJECT_ROOT / "data" / "logs" / "kelly_sizing_backtest.csv"
+    out_path = Path(args.out).expanduser().resolve()
     sim_df.to_csv(out_path, index=False)
     print(f"saved race-by-race sim to {out_path}")
 

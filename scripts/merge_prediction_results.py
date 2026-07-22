@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import argparse
 from pathlib import Path
 from typing import Any
 
@@ -71,18 +72,36 @@ def _dedupe_results(df: pd.DataFrame) -> pd.DataFrame:
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--predictions", default=str(PREDICTIONS_CSV),
+        help="入力predictions(通常はdata/logs/predictions.csvだが、"
+             "新モデルの合成データ(scripts/build_new_model_predictions_snapshot.py)"
+             "等、別ファイルを指定することもできる)。",
+    )
+    parser.add_argument("--results", default=str(RESULTS_CSV))
+    parser.add_argument(
+        "--out", default=str(MERGED_CSV),
+        help="出力先(デフォルトは/simが読む本物のprediction_results_merged.csvを上書きする)。",
+    )
+    args = parser.parse_args()
+
+    predictions_path = Path(args.predictions).expanduser().resolve()
+    results_path = Path(args.results).expanduser().resolve()
+    out_path = Path(args.out).expanduser().resolve()
+
     LOG_DIR.mkdir(parents=True, exist_ok=True)
 
-    if not PREDICTIONS_CSV.exists():
-        raise FileNotFoundError(f"Missing predictions csv: {PREDICTIONS_CSV}")
-    if not RESULTS_CSV.exists():
-        raise FileNotFoundError(f"Missing results csv: {RESULTS_CSV}")
+    if not predictions_path.exists():
+        raise FileNotFoundError(f"Missing predictions csv: {predictions_path}")
+    if not results_path.exists():
+        raise FileNotFoundError(f"Missing results csv: {results_path}")
 
-    print("loading predictions:", PREDICTIONS_CSV)
-    pred = pd.read_csv(PREDICTIONS_CSV, low_memory=False)
+    print("loading predictions:", predictions_path)
+    pred = pd.read_csv(predictions_path, low_memory=False)
 
-    print("loading results    :", RESULTS_CSV)
-    res = pd.read_csv(RESULTS_CSV, low_memory=False)
+    print("loading results    :", results_path)
+    res = pd.read_csv(results_path, low_memory=False)
 
     if pred.empty:
         raise RuntimeError("predictions.csv is empty")
@@ -143,12 +162,12 @@ def main() -> None:
         ascending=[True, True, True, True, True],
     ).reset_index(drop=True)
 
-    merged.to_csv(MERGED_CSV, index=False, encoding="utf-8-sig")
+    merged.to_csv(out_path, index=False, encoding="utf-8-sig")
 
     print("=" * 80)
     print("DONE")
     print("=" * 80)
-    print("saved:", MERGED_CSV)
+    print("saved:", out_path)
     print("rows :", len(merged))
     print("pred races:", pred[["date", "venue", "race_no"]].drop_duplicates().shape[0])
     print("result races:", res[["date", "venue", "race_no"]].drop_duplicates().shape[0])
