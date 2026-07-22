@@ -130,10 +130,57 @@ def compare_venue(
     return row
 
 
+def _publish_to_sim(out_df: pd.DataFrame, baseline_suffix: str, new_suffix: str) -> None:
+    """
+    app/main.py の _load_model_comparison() / app/templates/sim_stats.html の
+    「モデル比較」テーブルが読む data/logs/model_comparison_all_venues_holdout.csv
+    と同じスキーマ(venue, real_odds_available, races_new, valid_start, valid_end,
+    roi_old_pct, roi_new_pct, roi_delta_pct, note, offline_valid_logloss,
+    offline_valid_auc)に変換して書き出す。これにより/simページの既存の
+    モデル比較テーブルが、今回のcompare_model_suffixes.pyの結果(検証済みの
+    新モデル)をそのまま表示できるようになる(アプリ側のコード変更は不要)。
+    """
+    publish_path = LOG_DIR / "model_comparison_all_venues_holdout.csv"
+    rows = []
+    for _, r in out_df.iterrows():
+        comparable = bool(r.get("comparable", False))
+        row = {
+            "venue": r.get("venue", ""),
+            "real_odds_available": comparable,
+        }
+        if comparable:
+            row.update({
+                "valid_start": r.get("valid_start", ""),
+                "valid_end": r.get("valid_end", ""),
+                "races_new": r.get("races", 0),
+                "roi_old_pct": r.get("roi_old_pct", 0.0),
+                "roi_new_pct": r.get("roi_new_pct", 0.0),
+                "roi_delta_pct": r.get("roi_delta_pct", 0.0),
+            })
+        else:
+            row.update({
+                "note": r.get("note", ""),
+                "offline_valid_logloss": 0.0,
+                "offline_valid_auc": 0.0,
+            })
+        rows.append(row)
+
+    publish_df = pd.DataFrame(rows)
+    publish_df.to_csv(publish_path, index=False, encoding="utf-8-sig")
+    print(f"\n[PUBLISH] /simページのモデル比較テーブル用に書き出しました -> {publish_path}")
+    print(f"[PUBLISH] baseline='{baseline_suffix or '(本番)'}' vs new='{new_suffix}' として表示されます。")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser()
     parser.add_argument("--baseline_suffix", default="", help="比較元(通常は本番モデル=空文字)")
     parser.add_argument("--new_suffix", default="_formv2", help="比較先(検証用モデルのsuffix)")
+    parser.add_argument(
+        "--publish_to_sim", action="store_true",
+        help="この比較結果を data/logs/model_comparison_all_venues_holdout.csv "
+             "(app/templates/sim_stats.htmlの「モデル比較」テーブルが読むファイル)"
+             "としても書き出し、/simページに反映させる。",
+    )
     args = parser.parse_args()
 
     print("loading results.csv ...")
@@ -166,6 +213,9 @@ def main() -> None:
     if not not_comparable.empty:
         print("\n比較不可の会場:")
         print(not_comparable[["venue", "note"]].to_string(index=False))
+
+    if args.publish_to_sim:
+        _publish_to_sim(out_df, args.baseline_suffix, args.new_suffix)
 
     if not comparable.empty:
         total_invested_old = comparable["invested_old"].sum()
