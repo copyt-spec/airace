@@ -190,6 +190,19 @@ def _add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
         out[f"lane{lane}_exhibit_inv"] = (7.5 - out[ex_col]).clip(lower=-2, upper=2).astype("float32")
         out[f"lane{lane}_course_diff"] = (out[course_col] - lane).astype("int16")
 
+    # 2026-07-22追加: 「展開予想」の要因(scripts/analyze_race_development_patterns.py参照)。
+    # そのレース"内"での展示タイム・STの相対順位(1=最速/最良)。選手の通算能力
+    # (win_rate_prior等)を差し引いても有意に勝敗を追加予測することを確認済み。
+    # exhibit/stはレース前(展示走行後・出走表確定後)に既知の情報なのでリークは無い。
+    # 同じ行内の6レーン分の値を横に比較するだけなので、レース単位のgroupbyは不要。
+    exhibit_cols = [f"lane{i}_exhibit" for i in range(1, 7)]
+    st_cols = [f"lane{i}_st" for i in range(1, 7)]
+    exhibit_ranks = out[exhibit_cols].rank(axis=1, method="min", ascending=True)
+    st_ranks = out[st_cols].rank(axis=1, method="min", ascending=True)
+    for lane in range(1, 7):
+        out[f"lane{lane}_exhibit_rank"] = exhibit_ranks[f"lane{lane}_exhibit"].fillna(0).astype("float32")
+        out[f"lane{lane}_st_rank"] = st_ranks[f"lane{lane}_st"].fillna(0).astype("float32")
+
     for pos, pos_name in [
         ("first", "combo_first_lane"),
         ("second", "combo_second_lane"),
@@ -201,6 +214,8 @@ def _add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
         out[f"{pos}_motor"] = 0
         out[f"{pos}_boat"] = 0
         out[f"{pos}_racer_no"] = 0
+        out[f"{pos}_exhibit_rank"] = 0.0
+        out[f"{pos}_st_rank"] = 0.0
 
         for lane in range(1, 7):
             mask = out[pos_name] == lane
@@ -210,6 +225,8 @@ def _add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
             out.loc[mask, f"{pos}_motor"] = out.loc[mask, f"lane{lane}_motor"]
             out.loc[mask, f"{pos}_boat"] = out.loc[mask, f"lane{lane}_boat"]
             out.loc[mask, f"{pos}_racer_no"] = out.loc[mask, f"lane{lane}_racer_no"]
+            out.loc[mask, f"{pos}_exhibit_rank"] = out.loc[mask, f"lane{lane}_exhibit_rank"]
+            out.loc[mask, f"{pos}_st_rank"] = out.loc[mask, f"lane{lane}_st_rank"]
 
     out["first_second_st_diff"] = (out["first_st"] - out["second_st"]).astype("float32")
     out["first_third_st_diff"] = (out["first_st"] - out["third_st"]).astype("float32")
@@ -354,7 +371,12 @@ MOTOR_STATS_FEATURE_SUFFIXES = [
 ]
 
 
-def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool, include_form_features: bool = True) -> List[str]:
+def _get_feature_cols(
+    df: pd.DataFrame,
+    with_racer_stats: bool,
+    include_form_features: bool = True,
+    include_development_features: bool = True,
+) -> List[str]:
     candidate_cols = [
         "combo_first_lane", "combo_second_lane", "combo_third_lane",
         "wind_dir_code", "weather_code", "wind_speed_mps", "wave_cm",
@@ -381,6 +403,17 @@ def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool, include_form_fea
         "first_second_exhibit_diff", "first_third_exhibit_diff",
     ]
 
+    if include_development_features:
+        # 2026-07-22追加: scripts/analyze_race_development_patterns.py で検証済みの
+        # 「そのレース内での展示タイム・STの相対順位」(選手の通算能力を差し引いても
+        # 有意に勝敗を追加予測する)。with_racer_statsの有無に関わらず使える特徴量。
+        for lane in range(1, 7):
+            candidate_cols.append(f"lane{lane}_exhibit_rank")
+            candidate_cols.append(f"lane{lane}_st_rank")
+        for pos in ["first", "second", "third"]:
+            candidate_cols.append(f"{pos}_exhibit_rank")
+            candidate_cols.append(f"{pos}_st_rank")
+
     if with_racer_stats:
         racer_suffixes = RACER_STATS_BASE_FEATURE_SUFFIXES + (
             RACER_STATS_FORM_FEATURE_SUFFIXES if include_form_features else []
@@ -402,13 +435,20 @@ def _get_feature_cols(df: pd.DataFrame, with_racer_stats: bool, include_form_fea
 
 
 def _prepare_xy(
-    df: pd.DataFrame, with_racer_stats: bool, include_form_features: bool = True
+    df: pd.DataFrame,
+    with_racer_stats: bool,
+    include_form_features: bool = True,
+    include_development_features: bool = True,
 ) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     if "y" not in df.columns:
         raise ValueError("dataset must contain y column")
 
     work = _add_feature_block(df.copy())
-    feature_cols = _get_feature_cols(work, with_racer_stats, include_form_features=include_form_features)
+    feature_cols = _get_feature_cols(
+        work, with_racer_stats,
+        include_form_features=include_form_features,
+        include_development_features=include_development_features,
+    )
     if not feature_cols:
         raise RuntimeError("no feature columns found")
 
@@ -504,6 +544,7 @@ def _train_one_venue(
     motor_stats: pd.DataFrame | None = None,
     model_suffix: str = "",
     include_form_features: bool = True,
+    include_development_features: bool = True,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -530,10 +571,14 @@ def _train_one_venue(
 
     for with_racer_stats, suffix in variants:
         x_train, y_train, feature_cols = _prepare_xy(
-            train_raw, with_racer_stats, include_form_features=include_form_features
+            train_raw, with_racer_stats,
+            include_form_features=include_form_features,
+            include_development_features=include_development_features,
         )
         x_valid, y_valid, _ = _prepare_xy(
-            valid_raw, with_racer_stats, include_form_features=include_form_features
+            valid_raw, with_racer_stats,
+            include_form_features=include_form_features,
+            include_development_features=include_development_features,
         )
 
         pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
@@ -610,6 +655,7 @@ def _train_one_venue(
                 "with_racer_stats": True,
                 "with_recent_form_features": any("recent5_place_rate_prior" in c for c in feature_cols),
                 "with_motor_stats": any("motor_recent8_place_rate_prior" in c for c in feature_cols),
+                "with_development_features": any("exhibit_rank" in c for c in feature_cols),
                 "model_suffix": model_suffix,
                 "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
                 "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
@@ -676,6 +722,12 @@ def main() -> None:
              "test_sizeだけを大きくすると学習済み期間をholdoutとして採点してしまいリークする。"
              "このフラグ+同じ--test_sizeで両方を再学習すれば、リーク無しで長い期間を比較できる)。",
     )
+    parser.add_argument(
+        "--disable_development_features", action="store_true",
+        help="レース内の展示タイム順位・ST順位(2026-07-22追加、"
+             "scripts/analyze_race_development_patterns.py参照)を学習から除外する。"
+             "--disable_form_featuresと同様、本番モデル相当を再現して公平比較したい場合に使う。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -710,6 +762,7 @@ def main() -> None:
                 motor_stats=motor_stats,
                 model_suffix=args.model_suffix,
                 include_form_features=not args.disable_form_features,
+                include_development_features=not args.disable_development_features,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

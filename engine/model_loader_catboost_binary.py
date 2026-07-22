@@ -294,6 +294,19 @@ class BinaryCatBoostVenueModel:
             out[f"lane{lane}_exhibit_inv"] = (7.5 - out[ex_col]).clip(lower=-2, upper=2).astype("float32")
             out[f"lane{lane}_course_diff"] = (out[course_col] - lane).astype("int16")
 
+        # 2026-07-22追加: 「展開予想」の要因(scripts/analyze_race_development_patterns.py参照)。
+        # そのレース内での展示タイム・STの相対順位(1=最速/最良)。学習側
+        # (scripts/train_binary_catboost_per_venue_with_racer_stats.py)と同じロジック。
+        # ここでは常に計算しておき、実際に使うかどうかはロード済みモデルの
+        # meta.jsonのfeature_cols(_prepare_xがそれだけを選ぶ)に委ねる。
+        exhibit_cols = [f"lane{i}_exhibit" for i in range(1, 7)]
+        st_cols = [f"lane{i}_st" for i in range(1, 7)]
+        exhibit_ranks = out[exhibit_cols].rank(axis=1, method="min", ascending=True)
+        st_ranks = out[st_cols].rank(axis=1, method="min", ascending=True)
+        for lane in range(1, 7):
+            out[f"lane{lane}_exhibit_rank"] = exhibit_ranks[f"lane{lane}_exhibit"].fillna(0).astype("float32")
+            out[f"lane{lane}_st_rank"] = st_ranks[f"lane{lane}_st"].fillna(0).astype("float32")
+
         for pos, pos_name in [
             ("first", "combo_first_lane"),
             ("second", "combo_second_lane"),
@@ -305,6 +318,8 @@ class BinaryCatBoostVenueModel:
             out[f"{pos}_motor"] = 0
             out[f"{pos}_boat"] = 0
             out[f"{pos}_racer_no"] = 0
+            out[f"{pos}_exhibit_rank"] = 0.0
+            out[f"{pos}_st_rank"] = 0.0
 
             for lane in range(1, 7):
                 mask = out[pos_name] == lane
@@ -314,6 +329,8 @@ class BinaryCatBoostVenueModel:
                 out.loc[mask, f"{pos}_motor"] = out.loc[mask, f"lane{lane}_motor"]
                 out.loc[mask, f"{pos}_boat"] = out.loc[mask, f"lane{lane}_boat"]
                 out.loc[mask, f"{pos}_racer_no"] = out.loc[mask, f"lane{lane}_racer_no"]
+                out.loc[mask, f"{pos}_exhibit_rank"] = out.loc[mask, f"lane{lane}_exhibit_rank"]
+                out.loc[mask, f"{pos}_st_rank"] = out.loc[mask, f"lane{lane}_st_rank"]
 
         out["first_second_st_diff"] = (out["first_st"] - out["second_st"]).astype("float32")
         out["first_third_st_diff"] = (out["first_st"] - out["third_st"]).astype("float32")
