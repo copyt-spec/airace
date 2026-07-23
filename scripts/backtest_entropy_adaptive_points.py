@@ -40,7 +40,9 @@ PREDICTIONS_CSV = LOG_DIR / "predictions_combined_for_sim.csv"
 RESULTS_CSV = LOG_DIR / "results.csv"
 
 UNIT_BET_YEN = 100
-CUTOFF_DATE = "20260706"  # train(< this) / test(>= this)
+CUTOFF_DATE = "20260703"  # train(< this) / test(>= this)。2026-07-23追加:
+# テスト期間を長く取り会場別の確認をしやすくするため、20260706→20260703に短縮
+# (train側は7/1-7/2+それ以前のスパースな期間のみで境界を決める)。
 
 TIER_BOUNDS = {
     "low": (1, 6),
@@ -202,6 +204,7 @@ def main() -> None:
     adaptive = {"invested": 0, "returned": 0, "races": 0}
     venue_baseline = {}
     venue_adaptive = {}
+    venue_race_counts = {}
     tier_counts = {"low": 0, "mid": 0, "high": 0}
 
     n_test = 0
@@ -209,6 +212,7 @@ def main() -> None:
         if date < CUTOFF_DATE:
             continue
         n_test += 1
+        venue_race_counts[venue] = venue_race_counts.get(venue, 0) + 1
 
         # --- baseline: 現行本番ロジックそのまま ---
         best_bets = buy_selector.select_best_bets(ai_preds, venue=venue)
@@ -256,20 +260,28 @@ def main() -> None:
         profit = s["returned"] - s["invested"]
         print(f"{name:20s} races={s['races']:5d} invested={s['invested']:10,d} returned={s['returned']:10,d} profit={profit:+10,d} roi={roi:7.2f}%")
 
-    # ---------- 会場別 profit_delta の95%CI ----------
+    # ---------- 会場別の詳細(baseline/adaptive両方のROI・利益) ----------
     print()
-    print("=== 会場別 profit_delta (entropy_adaptive - baseline) ===")
+    print("=== 会場別 詳細(baseline vs entropy_adaptive) ===")
+    header = f"{'venue':6s} {'races':>6s} {'base_roi%':>9s} {'base_profit':>12s} {'adp_roi%':>9s} {'adp_profit':>12s} {'delta_profit':>13s}"
+    print(header)
+    print("-" * len(header))
     deltas = []
+    detail_rows = []
     for venue in set(list(venue_baseline.keys()) + list(venue_adaptive.keys())):
         vb = venue_baseline.get(venue, {"invested": 0, "returned": 0})
         va = venue_adaptive.get(venue, {"invested": 0, "returned": 0})
         b_profit = vb["returned"] - vb["invested"]
         a_profit = va["returned"] - va["invested"]
+        b_roi = vb["returned"] / vb["invested"] * 100 if vb["invested"] > 0 else 0.0
+        a_roi = va["returned"] / va["invested"] * 100 if va["invested"] > 0 else 0.0
         delta = a_profit - b_profit
+        races_v = venue_race_counts.get(venue, 0)
         deltas.append((venue, delta))
-    deltas.sort(key=lambda x: x[1])
-    for venue, delta in deltas:
-        print(f"  {venue:6s} profit_delta={delta:+,.0f}円")
+        detail_rows.append((venue, races_v, b_roi, b_profit, a_roi, a_profit, delta))
+    detail_rows.sort(key=lambda x: x[6])
+    for venue, races_v, b_roi, b_profit, a_roi, a_profit, delta in detail_rows:
+        print(f"{venue:6s} {races_v:6d} {b_roi:9.2f} {b_profit:12,.0f} {a_roi:9.2f} {a_profit:12,.0f} {delta:+13,.0f}")
 
     vals = [d for _, d in deltas]
     n = len(vals)
