@@ -13,6 +13,16 @@ from engine.venue_registry import VENUE_ORDER, normalize_venue_name
 RACER_STATS_PATH = Path("data/datasets/racer_point_in_time_stats.csv")
 MOTOR_STATS_PATH = Path("data/datasets/motor_point_in_time_stats.csv")
 
+# 2026-07-24追加: RACER_STATS_PATH/MOTOR_STATS_PATHは選手/モーター×レース日ごとの
+# 全履歴(それぞれ208MB・19MB)で、GitHubの1ファイル100MB上限もありコミットできず
+# gitignore対象のまま。このためRender環境にはこのデータが一切届いておらず、
+# ローカルとRenderで確率算出結果が食い違う原因になっていた。
+# ライブ推論では実際には「選手/モーターごとに一番新しい日付の行」しか使わないため、
+# scripts/build_racer_motor_stats_latest_snapshot.py で事前に抽出した軽量版
+# (数百KB程度、git管理下)をRender等フル履歴が無い環境向けのフォールバックとして使う。
+RACER_STATS_LATEST_PATH = Path("data/datasets/racer_point_in_time_stats_latest.csv")
+MOTOR_STATS_LATEST_PATH = Path("data/datasets/motor_point_in_time_stats_latest.csv")
+
 RACER_STATS_FEATURE_SUFFIXES = [
     "races_prior", "win_rate_prior", "place_rate_prior",
     "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
@@ -115,22 +125,41 @@ class BinaryCatBoostVenueModel:
         return model, meta, "with_racer_no"
 
     def _load_latest_racer_stats(self) -> pd.DataFrame:
-        if not RACER_STATS_PATH.exists():
+        if RACER_STATS_PATH.exists():
+            stats = pd.read_csv(RACER_STATS_PATH, low_memory=False)
+            stats["date"] = stats["date"].astype(str).str.zfill(8)
+            stats["racer_no"] = pd.to_numeric(stats["racer_no"], errors="coerce").fillna(0).astype(int)
+
+            # 選手ごとに最新日付の行だけを残す(直近実績を「現時点の推定値」として使う)
+            stats = stats.sort_values(["racer_no", "date"])
+            latest = stats.groupby("racer_no", as_index=False).tail(1)
+            return latest.set_index("racer_no")
+
+        if RACER_STATS_LATEST_PATH.exists():
+            # フル履歴ファイルが無い環境(Render等)向けの軽量フォールバック。
+            # scripts/build_racer_motor_stats_latest_snapshot.py で事前計算済みの
+            # 「選手ごとの最新1行」だけを使う(ローカルの上のパスと同じ形になる)。
             if self.debug:
-                print(f"[WARN] racer stats file not found: {RACER_STATS_PATH}. with_racer_stats特徴量は0で埋められます。")
-            return pd.DataFrame()
+                print(f"[INFO] using latest-only snapshot: {RACER_STATS_LATEST_PATH}")
+            latest = pd.read_csv(RACER_STATS_LATEST_PATH, low_memory=False)
+            latest["date"] = latest["date"].astype(str).str.zfill(8)
+            latest["racer_no"] = pd.to_numeric(latest["racer_no"], errors="coerce").fillna(0).astype(int)
+            return latest.set_index("racer_no")
 
-        stats = pd.read_csv(RACER_STATS_PATH, low_memory=False)
-        stats["date"] = stats["date"].astype(str).str.zfill(8)
-        stats["racer_no"] = pd.to_numeric(stats["racer_no"], errors="coerce").fillna(0).astype(int)
+        if self.debug:
+            print(f"[WARN] racer stats file not found: {RACER_STATS_PATH} / {RACER_STATS_LATEST_PATH}. with_racer_stats特徴量は0で埋められます。")
+        return pd.DataFrame()
 
-        # 選手ごとに最新日付の行だけを残す(直近実績を「現時点の推定値」として使う)
-        stats = stats.sort_values(["racer_no", "date"])
-        latest = stats.groupby("racer_no", as_index=False).tail(1)
-        return latest.set_index("racer_no")
+    def _active_racer_stats_path(self) -> Path | None:
+        if RACER_STATS_PATH.exists():
+            return RACER_STATS_PATH
+        if RACER_STATS_LATEST_PATH.exists():
+            return RACER_STATS_LATEST_PATH
+        return None
 
     def _reload_racer_stats_if_changed(self) -> None:
-        """racer_point_in_time_stats.csvの更新時刻をチェックし、変わっていれば再読み込みする。
+        """racer_point_in_time_stats(.csv/_latest.csv)の更新時刻をチェックし、
+        変わっていれば再読み込みする。
 
         アプリを再起動しなくても、scripts/build_racer_history.py →
         scripts/build_racer_point_in_time_stats.py を定期実行(スケジュール)で
@@ -138,9 +167,10 @@ class BinaryCatBoostVenueModel:
         predict_probaのたびに呼んでも問題ない。
         """
         try:
-            if not RACER_STATS_PATH.exists():
+            active_path = self._active_racer_stats_path()
+            if active_path is None:
                 return
-            mtime = RACER_STATS_PATH.stat().st_mtime
+            mtime = active_path.stat().st_mtime
         except Exception:
             return
 
@@ -154,29 +184,47 @@ class BinaryCatBoostVenueModel:
         self._racer_stats_mtime = mtime
 
     def _load_latest_motor_stats(self) -> pd.DataFrame:
-        if not MOTOR_STATS_PATH.exists():
+        if MOTOR_STATS_PATH.exists():
+            stats = pd.read_csv(MOTOR_STATS_PATH, low_memory=False)
+            stats["date"] = stats["date"].astype(str).str.zfill(8)
+            stats["motor"] = pd.to_numeric(stats["motor"], errors="coerce").fillna(0).astype(int)
+
+            # (venue, motor)ごとに最新日付の行だけを残す(直近実績を「現時点の推定値」として使う)
+            stats = stats.sort_values(["venue", "motor", "date"])
+            latest = stats.groupby(["venue", "motor"], as_index=False).tail(1)
+            return latest.set_index(["venue", "motor"])
+
+        if MOTOR_STATS_LATEST_PATH.exists():
+            # フル履歴ファイルが無い環境(Render等)向けの軽量フォールバック。
             if self.debug:
-                print(f"[WARN] motor stats file not found: {MOTOR_STATS_PATH}. motor特徴量は0で埋められます。")
-            return pd.DataFrame()
+                print(f"[INFO] using latest-only snapshot: {MOTOR_STATS_LATEST_PATH}")
+            latest = pd.read_csv(MOTOR_STATS_LATEST_PATH, low_memory=False)
+            latest["date"] = latest["date"].astype(str).str.zfill(8)
+            latest["motor"] = pd.to_numeric(latest["motor"], errors="coerce").fillna(0).astype(int)
+            return latest.set_index(["venue", "motor"])
 
-        stats = pd.read_csv(MOTOR_STATS_PATH, low_memory=False)
-        stats["date"] = stats["date"].astype(str).str.zfill(8)
-        stats["motor"] = pd.to_numeric(stats["motor"], errors="coerce").fillna(0).astype(int)
+        if self.debug:
+            print(f"[WARN] motor stats file not found: {MOTOR_STATS_PATH} / {MOTOR_STATS_LATEST_PATH}. motor特徴量は0で埋められます。")
+        return pd.DataFrame()
 
-        # (venue, motor)ごとに最新日付の行だけを残す(直近実績を「現時点の推定値」として使う)
-        stats = stats.sort_values(["venue", "motor", "date"])
-        latest = stats.groupby(["venue", "motor"], as_index=False).tail(1)
-        return latest.set_index(["venue", "motor"])
+    def _active_motor_stats_path(self) -> Path | None:
+        if MOTOR_STATS_PATH.exists():
+            return MOTOR_STATS_PATH
+        if MOTOR_STATS_LATEST_PATH.exists():
+            return MOTOR_STATS_LATEST_PATH
+        return None
 
     def _reload_motor_stats_if_changed(self) -> None:
-        """motor_point_in_time_stats.csvの更新時刻をチェックし、変わっていれば再読み込みする。
+        """motor_point_in_time_stats(.csv/_latest.csv)の更新時刻をチェックし、
+        変わっていれば再読み込みする。
 
         _reload_racer_stats_if_changed()と同じ設計(mtimeのみの軽量チェック)。
         """
         try:
-            if not MOTOR_STATS_PATH.exists():
+            active_path = self._active_motor_stats_path()
+            if active_path is None:
                 return
-            mtime = MOTOR_STATS_PATH.stat().st_mtime
+            mtime = active_path.stat().st_mtime
         except Exception:
             return
 
