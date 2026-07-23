@@ -12,8 +12,10 @@
 2026-07-14)の実オッズ付き予測を、一度だけ再現した静的なスナップショット。
 
 この2つを日付で単純に結合する:
-  - CUTOFF_DATE (デフォルト: 新モデルを本番投入した日 = 20260722) より前は
-    静的スナップショット(新モデルの検証用holdout結果)を使う
+  - CUTOFF_DATE (デフォルト20260721。新モデル投入日は20260722だが、
+    daily-prediction-crawlによる0721分のバックフィルがlogged_at的に投入後
+    [2026-07-23 23:31以降]に新モデルで行われたことを確認済みのため前倒し)
+    より前は静的スナップショット(新モデルの検証用holdout結果)を使う
   - CUTOFF_DATE 以降は data/logs/predictions.csv の実ログを使う
     (この日以降にログされた行は、新モデルデプロイ後の本物の実績なので、
     そのまま使ってよい)
@@ -41,9 +43,11 @@ SNAPSHOT_CSV = LOG_DIR / "predictions_new_model_snapshot.csv"
 LIVE_PREDICTIONS_CSV = LOG_DIR / "predictions.csv"
 OUT_CSV = LOG_DIR / "predictions_combined_for_sim.csv"
 
-# 新モデル(展開特徴量追加)を本番投入した日。この日以降のpredictions.csvの
-# 行は新モデルによる本物のログなのでそのまま使う。
-CUTOFF_DATE = "20260722"
+# 新モデル(展開特徴量追加)を本番投入した日は20260722だが、daily-prediction-crawl
+# による0721分のバックフィルは0723 23:31以降(=投入後)に新モデルで実行された
+# ことをlogged_atで確認済みのため、2026-07-24にカットオフを0721まで前倒しした。
+# この日以降のpredictions.csvの行は新モデルによる本物のログなのでそのまま使う。
+CUTOFF_DATE = "20260721"
 
 
 def _normalize_date(s: pd.Series) -> pd.Series:
