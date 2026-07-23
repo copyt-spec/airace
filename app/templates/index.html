@@ -874,6 +874,14 @@
                   </div>
                 {% endfor %}
               </div>
+            {% elif is_skip_decision is defined and is_skip_decision %}
+              <div class="signalBox bad" style="text-align:center;">
+                <div class="signalLabel" style="font-size:20px;">見送ろ！</div>
+                <div class="signalComment">
+                  このレースはモデルの自信度(Top確率)が閾値未満のため、
+                  買い目を選ばず見送る判断です。無理に賭けない方が期待値上有利です。
+                </div>
+              </div>
             {% else %}
               <div class="warn">
                 最強の買い目がまだありません。

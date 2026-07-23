@@ -632,6 +632,7 @@ def _render_venue_page(venue_name: str):
         ev_result: Dict[str, float] = {}
         race_signal: Dict[str, Any] = {}
         formation_options: List[Dict[str, Any]] = []
+        is_skip_decision = False
         resolved_model_mode = model_mode
 
         if mode == "full":
@@ -660,6 +661,7 @@ def _render_venue_page(venue_name: str):
             ev_result = _build_ev_map_from_prob_and_odds(probabilities, odds_map)
             best_bets = bundle.get("best_bets", []) or []
             formation_options = bundle.get("formation_options", []) or []
+            is_skip_decision = bool(bundle.get("is_skip_decision", False))
 
             race_signal = _build_race_signal(
                 probabilities=probabilities,
@@ -694,6 +696,7 @@ def _render_venue_page(venue_name: str):
             best_bets=best_bets,
             race_signal=race_signal,
             formation_options=formation_options,
+            is_skip_decision=is_skip_decision,
             beforeinfo=beforeinfo,
             before_info=beforeinfo,
             beforeinfo_data=beforeinfo,
@@ -727,6 +730,7 @@ def _render_venue_page(venue_name: str):
             best_bets=[],
             race_signal={},
             formation_options=[],
+            is_skip_decision=False,
             beforeinfo={},
             error_message=str(e),
             mode=mode,

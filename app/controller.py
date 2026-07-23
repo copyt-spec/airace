@@ -579,7 +579,14 @@ class RaceController:
         *,
         top_n: int = 5,
         venue_name: str = "",
-    ) -> List[Dict[str, Any]]:
+    ) -> Tuple[List[Dict[str, Any]], bool]:
+        """
+        戻り値: (best_bets, is_skip_decision)
+        is_skip_decision=True は、buy_selector.should_skip_race()による
+        「意図的な見送り」(低信頼度レースを買わない戦略)が発動したことを示す。
+        2026-07-23追加: この情報をUI側(見送ろ！表示)に伝えるため、単純な
+        リストからタプルに変更した。
+        """
         ai_preds = self._prob_map_to_rows(prob_map, odds_map=odds_map)
 
         best_bets = select_best_bets(
@@ -592,7 +599,7 @@ class RaceController:
             # best_betsが空でも、それが「意図的な見送り(低信頼度レースを買わない戦略)」
             # によるものなら、素朴なフォールバックで無理に賭けてしまわないようにする。
             if should_skip_race(ai_preds, venue=venue_name):
-                return []
+                return [], True
 
             fallback = sorted(
                 ai_preds,
@@ -603,9 +610,9 @@ class RaceController:
                 r["buy_rank"] = i
                 r["buy_score"] = float(r.get("score", 0.0))
                 r["is_best_bet"] = True
-            return fallback
+            return fallback, False
 
-        return best_bets
+        return best_bets, False
 
     # =========================
     # predict
@@ -631,6 +638,7 @@ class RaceController:
             "df120_rows": [],
             "formation_options": [],
             "model_mode": self._resolve_model_mode(model_mode or self.model_mode),
+            "is_skip_decision": False,
         }
 
         if not self._is_valid_6boats(base_entries):
@@ -682,12 +690,13 @@ class RaceController:
         if not prob_map:
             return out
 
-        best_bets = self._select_best_bets(
+        best_bets, is_skip_decision = self._select_best_bets(
             prob_map=prob_map,
             odds_map=odds_map,
             top_n=top_n,
             venue_name=venue_name,
         )
+        out["is_skip_decision"] = is_skip_decision
 
         # 2026-07-16追加: 選定自体(buy_selector)はそのままに、賭け金だけを
         # 単点ケリー基準で傾斜配分する。エラー時は賭け金無し(0円)の
