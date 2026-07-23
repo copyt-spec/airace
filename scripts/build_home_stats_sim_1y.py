@@ -6,6 +6,8 @@ from typing import Any, Dict
 
 import pandas as pd
 
+from engine.venue_registry import VENUE_ORDER
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
@@ -18,17 +20,13 @@ SIM_LIGHT_CSV_PATH = LOG_DIR / "prediction_results_sim_1y_light.csv"
 
 def _normalize_venue_name(v: str) -> str:
     s = str(v or "").strip()
-    if "丸亀" in s:
-        return "丸亀"
-    if "戸田" in s:
-        return "戸田"
-    if "児島" in s:
-        return "児島"
+    for venue_name in VENUE_ORDER:
+        if venue_name in s:
+            return venue_name
     return s
 
 
 def _empty_stats_map() -> Dict[str, Dict[str, Any]]:
-    venue_order = ["丸亀", "戸田", "児島"]
     empty_row = {
         "race_count": 0,
         "buy_count": 0,
@@ -40,7 +38,7 @@ def _empty_stats_map() -> Dict[str, Dict[str, Any]]:
         "total_profit": 0.0,
         "roi": 0.0,
     }
-    return {v: dict(empty_row) for v in venue_order}
+    return {v: dict(empty_row) for v in VENUE_ORDER}
 
 
 def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
@@ -53,7 +51,7 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
     if selected_df.empty:
         return out
 
-    for venue in ["丸亀", "戸田", "児島"]:
+    for venue in VENUE_ORDER:
         vdf = selected_df[selected_df["venue_norm"] == venue].copy()
         if vdf.empty:
             continue
@@ -127,6 +125,7 @@ def main() -> None:
         "available_min_date": str(df["date"].min()) if "date" in df.columns else "",
         "available_max_date": str(df["date"].max()) if "date" in df.columns else "",
         "row_count": int(len(df)),
+        "venues": list(VENUE_ORDER),
         "stats": stats,
     }
 
@@ -149,6 +148,7 @@ def main() -> None:
     light_df.to_csv(SIM_LIGHT_CSV_PATH, index=False, encoding="utf-8-sig")
 
     print("Saved sim light csv :", SIM_LIGHT_CSV_PATH)
+    print("Venue count         :", len(VENUE_ORDER))
     print("Done.")
 
 
