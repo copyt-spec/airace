@@ -155,9 +155,19 @@ def append_rows(rows: List[dict]) -> None:
 
 
 def run_downstream_pipeline() -> None:
+    combined_predictions = str(LOG_DIR / "predictions_combined_for_sim.csv")
     steps = [
-        [sys.executable, str(PROJECT_ROOT / "scripts" / "merge_prediction_results.py")],
+        # 2026-07-22追加: 新モデル(展開特徴量追加)のholdoutスナップショット +
+        # デプロイ日以降の本物のログを結合した合成predictionsを作る
+        # (scripts/build_combined_predictions_for_sim.py参照)。これを使わず
+        # 素のpredictions.csvのまま集計すると、新旧モデルが混在した/simに
+        # 逆戻りしてしまう。
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "build_combined_predictions_for_sim.py")],
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "merge_prediction_results.py"),
+         "--predictions", combined_predictions],
         [sys.executable, str(PROJECT_ROOT / "scripts" / "build_sim_light_csv.py")],
+        [sys.executable, str(PROJECT_ROOT / "scripts" / "backtest_kelly_sizing.py"),
+         "--predictions", combined_predictions],
         [sys.executable, str(PROJECT_ROOT / "scripts" / "build_kelly_bankroll_daily.py")],
     ]
     for cmd in steps:
