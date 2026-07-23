@@ -10,8 +10,12 @@ data/logs/results.csv を boatrace.jp から自動取得して更新する日次
 処理内容:
   1. 対象日(デフォルト: 前日)について、全24会場×最大12Rの結果を
      engine.raceresult_fetcher 経由で取得し、まだresults.csvに無い分だけ追記する。
-  2. --skip-pipeline が無ければ、続けて
-     merge_prediction_results.py → build_sim_light_csv.py → build_kelly_bankroll_daily.py
+  2. --skip-crawl が無ければ、続けて同じ対象日について
+     backfill_predictions_from_results.py を呼び出し(daily-prediction-crawl)、
+     現在稼働中のモデルによる予測(実オッズ付き)をdata/logs/predictions.csvに記録する。
+  3. --skip-pipeline が無ければ、続けて
+     build_combined_predictions_for_sim.py → merge_prediction_results.py →
+     build_sim_light_csv.py → backtest_kelly_sizing.py → build_kelly_bankroll_daily.py
      を自動実行し、/sim ダッシュボードまで一気通貫で最新化する。
 
 使い方の例:
@@ -154,6 +158,40 @@ def append_rows(rows: List[dict]) -> None:
     print(f"appended {len(df_new)} new rows -> results.csv now has {len(combined)} rows total")
 
 
+def run_prediction_crawl(targets: List[str]) -> None:
+    """
+    2026-07-23追加(daily-prediction-crawl): 結果を取得したのと同じ日付範囲について、
+    scripts/backfill_predictions_from_results.py を使い、現在稼働中のモデルで
+    予測(実オッズ付き)をdata/logs/predictions.csvに記録する。
+
+    backfill_predictions_from_results.pyは対象日がresults.csvに既に存在する
+    ことを前提にしているため、必ずappend_rows()の後(=results.csvが当日分を
+    含んだ状態)で呼び出すこと。デフォルトでは既存の(date,venue,race_no)は
+    スキップするので、同じ日に複数回実行しても重複は増えない。
+
+    Coworkのサンドボックス環境ではboatrace.jpへの接続がブロックされている
+    ため実行できない(過去の調査で確認済み)。ユーザーのMac上のlaunchd経由
+    でのみ有効に機能する想定。
+    """
+    if not targets:
+        return
+
+    start_date = min(targets)
+    end_date = max(targets)
+    cmd = [
+        sys.executable,
+        str(PROJECT_ROOT / "scripts" / "backfill_predictions_from_results.py"),
+        "--start-date", start_date,
+        "--end-date", end_date,
+    ]
+    print("=" * 80)
+    print("running prediction crawl:", " ".join(cmd))
+    try:
+        subprocess.run(cmd, check=True, cwd=str(PROJECT_ROOT))
+    except subprocess.CalledProcessError as e:
+        print(f"[WARN] prediction crawl failed: {e}")
+
+
 def run_downstream_pipeline() -> None:
     combined_predictions = str(LOG_DIR / "predictions_combined_for_sim.csv")
     steps = [
@@ -202,6 +240,11 @@ def main() -> None:
         help="merge_prediction_results / build_sim_light_csv / build_kelly_bankroll_daily の再実行をスキップ",
     )
     parser.add_argument(
+        "--skip-crawl",
+        action="store_true",
+        help="backfill_predictions_from_results.py による予測クロール(daily-prediction-crawl)をスキップ",
+    )
+    parser.add_argument(
         "--debug",
         action="store_true",
         help="パース失敗時に生HTMLをdata/logs/raceresult_debug/に保存する",
@@ -223,6 +266,9 @@ def main() -> None:
         all_rows.extend(rows)
 
     append_rows(all_rows)
+
+    if not args.skip_crawl:
+        run_prediction_crawl(targets)
 
     if not args.skip_pipeline and all_rows:
         run_downstream_pipeline()
