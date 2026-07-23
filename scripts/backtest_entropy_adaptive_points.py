@@ -174,6 +174,7 @@ def main() -> None:
     print(f"rows: {len(df)}, races: {df.drop_duplicates(['date','venue','race_no']).shape[0]}")
 
     train_entropies = []
+    train_entropies_by_venue: dict = {}
     race_cache = {}  # key -> (ai_preds, venue, actual_combo, payout_val, entropy)
 
     for (date, venue, race_no), race_df in df.groupby(["date", "venue", "race_no"], sort=False):
@@ -188,14 +189,43 @@ def main() -> None:
         race_cache[key] = (ai_preds, venue, actual_combo, payout_val, ent, date)
         if date < CUTOFF_DATE:
             train_entropies.append(ent)
+            train_entropies_by_venue.setdefault(venue, []).append(ent)
 
     q33, q66 = np.percentile(train_entropies, [33.33, 66.67])
-    print(f"train races: {len(train_entropies)}, entropy tercile境界(train由来): q33={q33:.4f}, q66={q66:.4f}")
+    print(f"train races: {len(train_entropies)}, 全体entropy tercile境界(train由来): q33={q33:.4f}, q66={q66:.4f}")
 
-    def tier_of(ent: float) -> str:
-        if ent <= q33:
+    # 2026-07-23追加: 会場ごとにentropy閾値を個別チューニングする。
+    # ただしtrain側の会場別サンプル数が1〜264件と極端に偏っている
+    # (尼崎=1件, 戸田=264件など)ため、素の会場別percentileは小サンプル会場で
+    # 過学習・ノイズだらけになる。empirical Bayes的な縮小推定(shrinkage)を使い、
+    # 「会場固有のpercentile」と「全体percentile」を、会場のtrainサンプル数 n_v /
+    # (n_v + SHRINKAGE_K) の重みで線形補間する。n_vが大きい会場(戸田等)ほど
+    # 自会場のデータに近づき、n_vが小さい会場(尼崎等)はほぼ全体値にフォールバックする。
+    SHRINKAGE_K = 30
+    venue_bounds: dict = {}
+    print()
+    print(f"会場別entropy閾値(shrinkage, K={SHRINKAGE_K}件相当の事前分布とブレンド):")
+    print(f"{'venue':6s} {'n_train':>7s} {'venue_q33':>10s} {'venue_q66':>10s} {'shrunk_q33':>11s} {'shrunk_q66':>11s}")
+    for venue in sorted(set(v for _, v, *_ in race_cache.values())):
+        vals = train_entropies_by_venue.get(venue, [])
+        n_v = len(vals)
+        if n_v >= 2:
+            vq33, vq66 = np.percentile(vals, [33.33, 66.67])
+        elif n_v == 1:
+            vq33 = vq66 = vals[0]
+        else:
+            vq33, vq66 = q33, q66
+        w = n_v / (n_v + SHRINKAGE_K)
+        s_q33 = w * vq33 + (1 - w) * q33
+        s_q66 = w * vq66 + (1 - w) * q66
+        venue_bounds[venue] = (s_q33, s_q66)
+        print(f"{venue:6s} {n_v:7d} {vq33:10.4f} {vq66:10.4f} {s_q33:11.4f} {s_q66:11.4f}")
+
+    def tier_of(venue: str, ent: float) -> str:
+        vq33, vq66 = venue_bounds.get(venue, (q33, q66))
+        if ent <= vq33:
             return "low"
-        elif ent <= q66:
+        elif ent <= vq66:
             return "mid"
         return "high"
 
@@ -236,7 +266,7 @@ def main() -> None:
             continue
         rows = score_and_sort(rows, cfg)
 
-        tier = tier_of(ent)
+        tier = tier_of(venue, ent)
         tier_counts[tier] += 1
         min_k, max_k = TIER_BOUNDS[tier]
         k = calc_dynamic_points_flex(rows, venue, min_k, max_k)
