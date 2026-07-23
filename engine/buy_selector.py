@@ -7,6 +7,24 @@ from typing import Any, Dict, List
 
 
 CONFIG_JSON_PATH = Path("data/models/venue_buy_config.optimized.json")
+ENTROPY_TIER_CONFIG_JSON_PATH = Path("data/models/entropy_tier_config.json")
+
+# 2026-07-23追加: 「1レースにつき最低3点は買う」という一律の下限が、
+# 確率分布が集中している(=堅い、entropyが低い)レースでは点数を無駄に
+# 増やして回収率を薄めていることが scripts/backtest_venue_tuned_tier_bounds.py
+# の検証(train/testを時系列分割、real odds使用)で分かった。
+# entropy(確率分布の散らばり)でレースをlow/mid/highの3段階に分け、
+# 段階ごとに点数の下限・上限(min/max points)を変える。デフォルトは
+# low(堅い)=1〜6点・mid=3〜10点(現行相当)・high(荒れ)=3〜10点(現行相当)。
+# 戸田・江戸川はtrainサンプルが十分多く(264件・166件)、個別により積極的な
+# 設定(aggressive_low_cut)の方が良かったためentropy_tier_config.jsonで上書きしている。
+# 検証結果(test期間1771レース): ROI 109.90%→114.52%、利益+85,590円→+113,940円、
+# 会場別95%CI=[-260,+2838]円(ほぼ有意)、races>=70の大口18会場中13会場がプラス。
+TIER_POINT_BOUNDS_DEFAULT: Dict[str, tuple] = {
+    "low": (1, 6),
+    "mid": (3, 10),
+    "high": (3, 10),
+}
 
 # 「モデルが一番自信を持つ組み合わせ(top1_prob)がこの値未満のレースは賭けない」戦略。
 # 2026-07-15: 戸田・桐生・江戸川(with_racer_statsモデル、真のholdout期間1370レース)で検証。
@@ -181,6 +199,55 @@ def _load_external_config() -> Dict[str, Dict[str, float]]:
         return {}
 
 
+def _load_entropy_tier_config() -> Dict[str, Any]:
+    if not ENTROPY_TIER_CONFIG_JSON_PATH.exists():
+        return {}
+    try:
+        with open(ENTROPY_TIER_CONFIG_JSON_PATH, "r", encoding="utf-8") as f:
+            raw = json.load(f)
+        if not isinstance(raw, dict):
+            return {}
+        return raw
+    except Exception:
+        return {}
+
+
+def _entropy_thresholds(venue: str | None) -> tuple:
+    """会場ごとのentropy tercile境界(q33, q66)を返す。
+    data/models/entropy_tier_config.json (scripts/compute_entropy_tier_config.py で生成)
+    が無ければ、検証時に使ったデフォルト値にフォールバックする。"""
+    cfg = _load_entropy_tier_config()
+    thresholds = cfg.get("entropy_thresholds", {})
+    v = _normalize_venue_name(venue or "")
+    if v in thresholds:
+        q33, q66 = thresholds[v]
+        return float(q33), float(q66)
+    if "default" in thresholds:
+        q33, q66 = thresholds["default"]
+        return float(q33), float(q66)
+    return 0.9712, 0.9878  # 2026-07-23算出時点の全会場合算フォールバック値
+
+
+def _entropy_tier(entropy: float, venue: str | None) -> str:
+    q33, q66 = _entropy_thresholds(venue)
+    if entropy <= q33:
+        return "low"
+    elif entropy <= q66:
+        return "mid"
+    return "high"
+
+
+def _tier_point_bounds(venue: str | None, tier: str) -> tuple:
+    cfg = _load_entropy_tier_config()
+    override_all = cfg.get("tier_point_bounds_override", {})
+    default_bounds = cfg.get("tier_point_bounds_default", {})
+    v = _normalize_venue_name(venue or "")
+
+    bounds_src = override_all.get(v) or default_bounds or TIER_POINT_BOUNDS_DEFAULT
+    pair = bounds_src.get(tier, TIER_POINT_BOUNDS_DEFAULT[tier])
+    return int(pair[0]), int(pair[1])
+
+
 def _resolve_config(
     venue: str | None = None,
     min_prob: float | None = None,
@@ -213,6 +280,11 @@ def _resolve_config(
     if "min_ev" not in cfg:
         cfg["min_ev"] = 0.85
 
+    # 2026-07-23注記: cfg["min_points"]/["max_points"]/["fixed_points"]は
+    # 過去のロジックの名残で、実際の点数決定は現在_calc_dynamic_points内の
+    # entropy tierごとのTIER_POINT_BOUNDS(_tier_point_bounds参照)で行っている。
+    # ここでの計算結果はもう使われないが、外部configとの後方互換のために
+    # フィールド自体は残してある。
     if "fixed_points" in cfg:
         fp = _safe_int(cfg["fixed_points"], 6)
         cfg["min_points"] = float(fp)
@@ -258,12 +330,9 @@ def _calc_distribution_entropy(probs: List[float]) -> float:
 
 
 def _calc_dynamic_points(rows: List[Dict[str, Any]], venue: str, cfg: Dict[str, float]) -> int:
-    min_points = max(3, min(12, _safe_int(cfg.get("min_points", 3), 3)))
-    max_points = max(min_points, min(12, _safe_int(cfg.get("max_points", 10), 10)))
-
     probs = sorted([_safe_float(r.get("prob", 0.0), 0.0) for r in rows], reverse=True)
     if not probs:
-        return min_points
+        return 3
 
     top1 = probs[0]
     top2 = probs[1] if len(probs) >= 2 else 0.0
@@ -271,6 +340,15 @@ def _calc_dynamic_points(rows: List[Dict[str, Any]], venue: str, cfg: Dict[str, 
     top5_sum = sum(probs[:5])
     entropy = _calc_distribution_entropy(probs[:10])
     gap12 = max(0.0, top1 - top2)
+
+    # 2026-07-23変更: 従来はcfg(会場別固定、3〜12点にハードクランプ)から
+    # min_points/max_pointsを決めていたが、これを撤廃しentropy tier
+    # (low/mid/high、_entropy_tier参照)ごとの点数レンジに置き換えた。
+    # 低entropy(=堅い、確率が集中している)レースは最低1点まで絞れる。
+    # 根拠: scripts/backtest_venue_tuned_tier_bounds.py の検証結果
+    # (test 1771レースでROI 109.90%→114.52%、大口18会場中13会場がプラス)。
+    tier = _entropy_tier(entropy, venue)
+    min_points, max_points = _tier_point_bounds(venue, tier)
 
     spread_score = 0.0
     spread_score += (0.12 - min(top1, 0.12)) / 0.12 * 0.36
@@ -293,14 +371,14 @@ def _calc_dynamic_points(rows: List[Dict[str, Any]], venue: str, cfg: Dict[str, 
     points = min_points + round((max_points - min_points) * spread_score)
 
     if top1 >= 0.10 and top3_sum >= 0.23:
-        points = min(points, 3)
+        points = min(points, max(min_points, 3))
     elif top1 >= 0.08 and top5_sum >= 0.34:
-        points = min(points, max(4, min_points))
+        points = min(points, max(min_points, min(4, max_points)))
 
     if entropy >= 0.88 and top1 <= 0.05:
         points = min(max_points, points + 1)
 
-    return max(3, min(12, points))
+    return max(min_points, min(max_points, points))
 
 
 def _load_external_skip_thresholds() -> Dict[str, float]:
@@ -456,7 +534,11 @@ def select_best_bets(
     )
 
     dynamic_points = _calc_dynamic_points(rows, venue or "default", cfg)
-    final_n = max(3, min(12, min(_safe_int(top_n, 12), dynamic_points)))
+    # 2026-07-23変更: 以前は3〜12点にハードクランプしていたが、
+    # _calc_dynamic_points側でentropy tierごとの適切なmin/maxに既に
+    # クランプ済みなので、ここでは「rows件数」「top_n」を超えないための
+    # 安全弁(1〜20点)だけをかける。
+    final_n = max(1, min(20, min(_safe_int(top_n, 20), dynamic_points)))
 
     selected = rows[:final_n]
 

@@ -132,6 +132,7 @@ data/models/*
 !data/models/trifecta_binary_catboost_大村_with_racer_stats_meta.json
 
 !data/models/venue_buy_config.optimized.json
+!data/models/entropy_tier_config.json
 
 # ▼ global_auto模式(2026-07-17): このモデルファイルがgit管理外だったせいで
 # RaceController()のコンストラクタが本番(Render)で毎回FileNotFoundErrorに
