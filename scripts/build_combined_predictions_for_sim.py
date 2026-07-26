@@ -32,11 +32,17 @@ scripts/update_results_daily.py の日次パイプラインから呼ばれる想
 from __future__ import annotations
 
 import argparse
+import sys
 from pathlib import Path
 
 import pandas as pd
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
+
+from engine.venue_registry import normalize_venue_name  # noqa: E402
+
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
 
 SNAPSHOT_CSV = LOG_DIR / "predictions_new_model_snapshot.csv"
@@ -49,6 +55,19 @@ OUT_CSV = LOG_DIR / "predictions_combined_for_sim.csv"
 # この日以降のpredictions.csvの行は新モデルによる本物のログなのでそのまま使う。
 CUTOFF_DATE = "20260721"
 
+# 2026-07-26追加: 「今節成績」特徴量は全会場一律ではなく9会場だけ選択導入した
+# (scripts/build_meeting_form_predictions_snapshot.py参照)。上記の
+# snapshot/liveの合成(全会場共通)を土台にしたうえで、この9会場だけ
+# デプロイ日(MEETING_FORM_CUTOFF_DATE)より前をmeeting_form版のholdout
+# スナップショットで上書きする2段目のレイヤーとして扱う。デプロイ日以降は
+# 土台側のlive(predictions.csv実ログ、新モデルによる本物の予測)がそのまま
+# 使われるので、ここでは触らない。
+MEETING_FORM_SNAPSHOT_CSV = LOG_DIR / "predictions_meetingform_snapshot.csv"
+MEETING_FORM_VENUES = [
+    "戸田", "江戸川", "丸亀", "びわこ", "若松", "下関", "芦屋", "鳴門", "浜名湖",
+]
+MEETING_FORM_CUTOFF_DATE = "20260726"
+
 
 def _normalize_date(s: pd.Series) -> pd.Series:
     return s.astype(str).str.replace(".0", "", regex=False).str.zfill(8)
@@ -60,12 +79,20 @@ def main() -> None:
     parser.add_argument("--snapshot", default=str(SNAPSHOT_CSV))
     parser.add_argument("--live", default=str(LIVE_PREDICTIONS_CSV))
     parser.add_argument("--out", default=str(OUT_CSV))
+    parser.add_argument("--meeting-form-snapshot", default=str(MEETING_FORM_SNAPSHOT_CSV))
+    parser.add_argument("--meeting-form-cutoff-date", default=MEETING_FORM_CUTOFF_DATE, help="YYYYMMDD")
+    parser.add_argument(
+        "--skip-meeting-form-layer", action="store_true",
+        help="9会場のmeeting_form 2段目レイヤーを適用せず、従来通りの合成のみ行う(デバッグ用)。",
+    )
     args = parser.parse_args()
 
     cutoff = str(args.cutoff_date)
     snapshot_path = Path(args.snapshot)
     live_path = Path(args.live)
     out_path = Path(args.out)
+    meeting_form_snapshot_path = Path(args.meeting_form_snapshot)
+    meeting_form_cutoff = str(args.meeting_form_cutoff_date)
 
     frames = []
 
@@ -91,6 +118,28 @@ def main() -> None:
         raise RuntimeError("合成対象データが0件です(snapshot/liveどちらも見つかりません)")
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
+
+    if not args.skip_meeting_form_layer:
+        if meeting_form_snapshot_path.exists():
+            mf_venues = [normalize_venue_name(v) for v in MEETING_FORM_VENUES]
+            mf_snap = pd.read_csv(meeting_form_snapshot_path, low_memory=False)
+            mf_snap["date"] = _normalize_date(mf_snap["date"])
+            mf_snap["venue"] = mf_snap["venue"].astype(str).map(normalize_venue_name)
+            mf_snap = mf_snap[mf_snap["date"] < meeting_form_cutoff].copy()
+            print(f"meeting_form snapshot rows (venue in {mf_venues}, date < {meeting_form_cutoff}): {len(mf_snap)}")
+
+            # 土台側(snapshot+live)から、この9会場×このカットオフより前の行を除去してから、
+            # meeting_form版のholdoutスナップショットに置き換える。
+            combined["venue"] = combined["venue"].astype(str).map(normalize_venue_name)
+            before_rows = len(combined)
+            remove_mask = combined["venue"].isin(mf_venues) & (combined["date"] < meeting_form_cutoff)
+            print(f"removing {int(remove_mask.sum())} base rows for meeting_form venues before {meeting_form_cutoff}")
+            combined = combined[~remove_mask].copy()
+            combined = pd.concat([combined, mf_snap], ignore_index=True, sort=False)
+            print(f"combined rows: {before_rows} -> {len(combined)} (after meeting_form layer)")
+        else:
+            print(f"[WARN] meeting_form snapshot not found: {meeting_form_snapshot_path}(9会場のholdout層はスキップされます)")
+
     combined = combined.sort_values(["date", "venue", "race_no", "rank_prob"]).reset_index(drop=True)
 
     combined.to_csv(out_path, index=False, encoding="utf-8-sig")

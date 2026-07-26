@@ -8,8 +8,12 @@ data/logs/results.csv を boatrace.jp から自動取得して更新する日次
 (ユーザーの手元環境で実行・動作確認する必要がある)。
 
 処理内容:
-  1. 対象日(デフォルト: 前日)について、全24会場×最大12Rの結果を
+  1. 対象日(デフォルト: 当日、2026-07-26以前は前日だった。--exclude-todayで
+     旧挙動に戻せる)について、全24会場×最大12Rの結果を
      engine.raceresult_fetcher 経由で取得し、まだresults.csvに無い分だけ追記する。
+     当日でまだ終わっていないレースはfetch_date()側で安全にスキップされる
+     (2026-07-26に1日3回実行(12:00/17:00/23:00)化したのに合わせ、当日の
+     レースが終わり次第こまめにresults.csv・/simへ反映されるようにした)。
   2. --skip-crawl が無ければ、続けて同じ対象日について
      backfill_predictions_from_results.py を呼び出し(daily-prediction-crawl)、
      現在稼働中のモデルによる予測(実オッズ付き)をdata/logs/predictions.csvに記録する。
@@ -222,12 +226,18 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Fetch daily race results from boatrace.jp and update results.csv"
     )
-    parser.add_argument("--date", help="YYYYMMDD (省略時は前日)")
+    parser.add_argument("--date", help="YYYYMMDD (省略時は当日+過去days-back日分)")
     parser.add_argument(
         "--days-back",
         type=int,
         default=1,
-        help="今日から何日前まで遡って埋めるか(取りこぼし後追い用、デフォルト1=前日のみ)",
+        help="当日を含め何日前まで遡って埋めるか(取りこぼし後追い用、デフォルト1=当日のみ)",
+    )
+    parser.add_argument(
+        "--exclude-today",
+        action="store_true",
+        help="2026-07-26以前の挙動(当日を対象に含めない、前日以前のみ)に戻す場合に指定する。"
+             "1日1回23:00のみ実行していた頃の名残で、通常は不要。",
     )
     parser.add_argument(
         "--venue",
@@ -255,7 +265,16 @@ def main() -> None:
         targets = [args.date]
     else:
         today = date.today()
-        targets = [_yyyymmdd(today - timedelta(days=i)) for i in range(1, args.days_back + 1)]
+        # 2026-07-26変更: 以前は「前日」しか対象にしていなかったため、1日3回
+        # (12:00/17:00/23:00)に増やしても当日分が一切results.csvに入らない
+        # 問題があった(fetch_date()は未終了レースを安全にスキップするだけ
+        # なので、当日を含めても既に終わったレースだけ正しく取得できる)。
+        # 当日を含めるのがデフォルトになり、--exclude-todayで以前の挙動に戻せる。
+        start_offset = 1 if args.exclude_today else 0
+        targets = [
+            _yyyymmdd(today - timedelta(days=i))
+            for i in range(start_offset, start_offset + args.days_back)
+        ]
         targets.reverse()
 
     all_rows: List[dict] = []

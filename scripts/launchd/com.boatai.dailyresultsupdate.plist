@@ -12,14 +12,30 @@
         <string>2</string>
     </array>
 
-    <!-- 毎日23:00(その日のレースが全て終わった後)に実行 -->
+    <!-- 2026-07-26変更: 1日1回(23:00)だと結果反映が翌日まで遅れるため、
+         12:00・17:00・23:00の1日3回に増やした(日中のレース分もこまめに
+         resultsに反映し、/simが最新に近い状態を保てるようにする) -->
     <key>StartCalendarInterval</key>
-    <dict>
-        <key>Hour</key>
-        <integer>23</integer>
-        <key>Minute</key>
-        <integer>0</integer>
-    </dict>
+    <array>
+        <dict>
+            <key>Hour</key>
+            <integer>12</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>17</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+        <dict>
+            <key>Hour</key>
+            <integer>23</integer>
+            <key>Minute</key>
+            <integer>0</integer>
+        </dict>
+    </array>
 
     <key>StandardOutPath</key>
     <string>/Users/takedanaoya/boat_ai/boat_ai/data/logs/daily_update_run_logs/launchd_stdout.log</string>

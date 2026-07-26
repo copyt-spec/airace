@@ -1,0 +1,25 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.boatai.rankAnotify</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/takedanaoya/boat_ai/boat_ai/scripts/run_notify_rank_a.sh</string>
+    </array>
+
+    <!-- 5分おきに実行(発走8〜13分前の窓を取りこぼさないための頻度) -->
+    <key>StartInterval</key>
+    <integer>300</integer>
+
+    <key>StandardOutPath</key>
+    <string>/Users/takedanaoya/boat_ai/boat_ai/data/logs/notify_rank_a_run_logs/launchd_stdout.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/takedanaoya/boat_ai/boat_ai/data/logs/notify_rank_a_run_logs/launchd_stderr.log</string>
+
+    <key>RunAtLoad</key>
+    <false/>
+</dict>
+</plist>

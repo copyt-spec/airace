@@ -370,12 +370,55 @@ MOTOR_STATS_FEATURE_SUFFIXES = [
     "recent8_races_prior", "recent8_place_rate_prior",
 ]
 
+# 2026-07-26追加: 「今節(このシリーズ)これまでの成績」特徴量。
+# scripts/join_meeting_so_far_features.py で trifecta_train_by_venue/{venue}.csv に
+# lane{1-6}_meeting_so_far_{top3_rate,win_rate,avg_st,n} として既に列結合済み
+# (raw_txt K-fileの「第N日」からmeeting_instance_idを判定し、節内の同一選手の
+# それまでの成績をリーク無しexpandingで計算したもの)。
+# OLS(HC1)で検証済み: meeting_so_far_top3_rate coef=+0.256, CI[0.253,0.259],
+# n=941,164(全24会場)、レーン(コース)を統制しても有意。
+MEETING_FORM_STATS_FEATURE_SUFFIXES = [
+    "meeting_so_far_top3_rate", "meeting_so_far_win_rate",
+    "meeting_so_far_avg_st", "meeting_so_far_n",
+]
+
+
+def _add_meeting_form_block(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    lane{n}_meeting_so_far_* は join_meeting_so_far_features.py で既に
+    trifecta_train_by_venue/{venue}.csv に列として結合済みなので、ここでは
+    (a) 列が無いデータセット(未結合)でも動くようフォールバックでNaN列を用意し、
+    (b) 他の特徴量ブロックと同様、combo(1着/2着/3着候補)側にも同じ値を割り当てる
+    だけでよい。
+    """
+    out = df.copy()
+
+    for lane in range(1, 7):
+        for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
+            col = f"lane{lane}_{suf}"
+            if col not in out.columns:
+                out[col] = np.nan
+
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
+            out[f"{pos}_{suf}"] = np.nan
+            for lane in range(1, 7):
+                mask = out[pos_name] == lane
+                out.loc[mask, f"{pos}_{suf}"] = out.loc[mask, f"lane{lane}_{suf}"]
+
+    return out
+
 
 def _get_feature_cols(
     df: pd.DataFrame,
     with_racer_stats: bool,
     include_form_features: bool = True,
     include_development_features: bool = True,
+    include_meeting_form_features: bool = True,
 ) -> List[str]:
     candidate_cols = [
         "combo_first_lane", "combo_second_lane", "combo_third_lane",
@@ -431,6 +474,14 @@ def _get_feature_cols(
                 for suf in MOTOR_STATS_FEATURE_SUFFIXES:
                     candidate_cols.append(f"{pos}_motor_{suf}")
 
+    if include_meeting_form_features:
+        for lane in range(1, 7):
+            for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
+                candidate_cols.append(f"lane{lane}_{suf}")
+        for pos in ["first", "second", "third"]:
+            for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
+                candidate_cols.append(f"{pos}_{suf}")
+
     return [c for c in candidate_cols if c in df.columns]
 
 
@@ -439,15 +490,19 @@ def _prepare_xy(
     with_racer_stats: bool,
     include_form_features: bool = True,
     include_development_features: bool = True,
+    include_meeting_form_features: bool = True,
 ) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     if "y" not in df.columns:
         raise ValueError("dataset must contain y column")
 
     work = _add_feature_block(df.copy())
+    if include_meeting_form_features:
+        work = _add_meeting_form_block(work)
     feature_cols = _get_feature_cols(
         work, with_racer_stats,
         include_form_features=include_form_features,
         include_development_features=include_development_features,
+        include_meeting_form_features=include_meeting_form_features,
     )
     if not feature_cols:
         raise RuntimeError("no feature columns found")
@@ -545,6 +600,7 @@ def _train_one_venue(
     model_suffix: str = "",
     include_form_features: bool = True,
     include_development_features: bool = True,
+    include_meeting_form_features: bool = True,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -574,11 +630,13 @@ def _train_one_venue(
             train_raw, with_racer_stats,
             include_form_features=include_form_features,
             include_development_features=include_development_features,
+            include_meeting_form_features=include_meeting_form_features,
         )
         x_valid, y_valid, _ = _prepare_xy(
             valid_raw, with_racer_stats,
             include_form_features=include_form_features,
             include_development_features=include_development_features,
+            include_meeting_form_features=include_meeting_form_features,
         )
 
         pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
@@ -656,6 +714,7 @@ def _train_one_venue(
                 "with_recent_form_features": any("recent5_place_rate_prior" in c for c in feature_cols),
                 "with_motor_stats": any("motor_recent8_place_rate_prior" in c for c in feature_cols),
                 "with_development_features": any("exhibit_rank" in c for c in feature_cols),
+                "with_meeting_form_features": any("meeting_so_far" in c for c in feature_cols),
                 "model_suffix": model_suffix,
                 "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
                 "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
@@ -728,6 +787,13 @@ def main() -> None:
              "scripts/analyze_race_development_patterns.py参照)を学習から除外する。"
              "--disable_form_featuresと同様、本番モデル相当を再現して公平比較したい場合に使う。",
     )
+    parser.add_argument(
+        "--disable_meeting_form_features", action="store_true",
+        help="「今節(このシリーズ)これまでの成績」特徴量(2026-07-26追加、"
+             "scripts/join_meeting_so_far_features.py で事前結合済みのlane{1-6}_meeting_so_far_*)"
+             "を学習から除外する。--disable_form_featuresと同様、本番モデル相当を再現して"
+             "公平比較したい場合に使う。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -763,6 +829,7 @@ def main() -> None:
                 model_suffix=args.model_suffix,
                 include_form_features=not args.disable_form_features,
                 include_development_features=not args.disable_development_features,
+                include_meeting_form_features=not args.disable_meeting_form_features,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

@@ -37,6 +37,7 @@ from scripts.train_binary_catboost_per_venue_with_racer_stats import (  # noqa: 
     _add_feature_block,
     _add_racer_stats_block,
     _add_motor_stats_block,
+    _add_meeting_form_block,
     _load_racer_stats,
     _load_motor_stats,
 )
@@ -195,6 +196,11 @@ def generate_for_venue(
     motor_stats = _load_motor_stats()
     df = _add_motor_stats_block(df, motor_stats)
     df = _add_feature_block(df)
+    # 2026-07-26追加: meeting_so_far特徴量(今節これまでの成績)のfirst/second/third
+    # combo位置へのマッピング列を用意する。lane{1-6}_meeting_so_far_*自体は
+    # trifecta_train_by_venue/{venue}.csvに事前結合済みだが、first_meeting_so_far_*等の
+    # 12列はこの関数を呼ばないと存在せず、_meetingformモデルで評価するとKeyErrorになる。
+    df = _add_meeting_form_block(df)
 
     feature_cols = list(model.feature_names_)
     x = df[feature_cols].copy()

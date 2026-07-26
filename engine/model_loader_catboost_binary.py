@@ -33,6 +33,28 @@ MOTOR_STATS_FEATURE_SUFFIXES = [
     "recent8_races_prior", "recent8_place_rate_prior",
 ]
 
+# 2026-07-26追加: 「今節(このシリーズ)これまでの成績」特徴量のライブ版。
+# 学習側(scripts/train_binary_catboost_per_venue_with_racer_stats.py)はraw_txt
+# K-fileの「第N日」から節を判定できるが、進行中の開催にはK-fileがまだ無いため、
+# ライブでは代わりに「前日との日付連続性」(節は必ず連続した暦日で開催される前提)
+# で節の開始日を推定する。節内の各選手の成績は、既存の2つのログファイルの
+# 組み合わせから再構成する:
+#   - data/logs/predictions_lane_racer_no.csv: レースごとのレーン→選手番号
+#     (app/main.pyがfullモードでページ表示するたびに記録、2026-07-26時点で
+#      2026-07-01以降946行・22会場分。全レースを網羅していない可能性がある点に注意)
+#   - data/logs/results.csv: レースごとの着順(actual_combo、レーン単位)
+# STは上記どちらにも含まれていないため、avg_stは常にNaN(→0埋め)のまま。
+# どちらのファイルもRenderには無い(永続ディスク無し、[[boat_ai_results_auto_update]]
+# 参照)ため、その環境では本特徴量は常に0(=データ無し扱い)に自動的にフォールバック
+# する(既存のracer_stats/motor_statsの「ファイルが無ければ0埋め」と同じ設計)。
+ENTRIES_LOG_PATH = Path("data/logs/predictions_lane_racer_no.csv")
+RESULTS_LOG_PATH = Path("data/logs/results.csv")
+
+MEETING_FORM_STATS_FEATURE_SUFFIXES = [
+    "meeting_so_far_top3_rate", "meeting_so_far_win_rate",
+    "meeting_so_far_avg_st", "meeting_so_far_n",
+]
+
 
 class BinaryCatBoostVenueModel:
     def __init__(
@@ -90,6 +112,15 @@ class BinaryCatBoostVenueModel:
         if self.use_racer_stats:
             self._reload_motor_stats_if_changed()
 
+        # 今節成績特徴量のライブ版(2026-07-26追加)。data/logs/predictions_lane_racer_no.csv
+        # とdata/logs/results.csvの両方のmtimeを見て、どちらかが変わったら再構成する。
+        # どちらか一方でも無ければNone(=呼び出し側は全部0埋めにフォールバック)。
+        self.meeting_history_long: pd.DataFrame | None = None
+        self.meeting_raced_dates: Dict[str, List[str]] = {}
+        self._meeting_entries_mtime: float = 0.0
+        self._meeting_results_mtime: float = 0.0
+        self._reload_meeting_history_if_changed()
+
         if self.debug:
             print("[LOADED_MODELS]", list(self.models.keys()))
             print("[MODEL_VARIANT]", self.model_variant)
@@ -98,6 +129,8 @@ class BinaryCatBoostVenueModel:
                 print("[RACER_STATS_LOADED]", len(self.racer_stats_latest), "racers")
             if self.motor_stats_latest is not None:
                 print("[MOTOR_STATS_LOADED]", len(self.motor_stats_latest), "venue x motor pairs")
+            if self.meeting_history_long is not None:
+                print("[MEETING_HISTORY_LOADED]", len(self.meeting_history_long), "lane-race rows")
 
     def _load_venue_model(self, venue: str):
         """with_racer_stats モデルを優先して読み込み、無ければ with_racer_no にフォールバックする。"""
@@ -236,6 +269,224 @@ class BinaryCatBoostVenueModel:
 
         self.motor_stats_latest = self._load_latest_motor_stats()
         self._motor_stats_mtime = mtime
+
+    def _load_meeting_history(self) -> pd.DataFrame:
+        """
+        predictions_lane_racer_no.csv(レーン→選手番号)とresults.csv(着順)を
+        (date, venue, race_no)で結合し、lane単位の「そのレースでtop3/勝ちだったか」
+        のロング形式テーブルを作る。scripts/build_meeting_so_far_all_venues.pyの
+        ライブ簡易版(raw_txtの代わりにこの2つのログを使う)。
+
+        どちらかのファイルが無ければ空のDataFrameを返す(呼び出し側は0埋めにフォールバック)。
+        """
+        if not ENTRIES_LOG_PATH.exists() or not RESULTS_LOG_PATH.exists():
+            if self.debug:
+                print(f"[WARN] meeting history用ログが見つかりません: "
+                      f"{ENTRIES_LOG_PATH}(exists={ENTRIES_LOG_PATH.exists()}) / "
+                      f"{RESULTS_LOG_PATH}(exists={RESULTS_LOG_PATH.exists()})。"
+                      "今節成績のライブ計算は0で埋められます。")
+            return pd.DataFrame()
+
+        try:
+            entries = pd.read_csv(ENTRIES_LOG_PATH, low_memory=False)
+            results = pd.read_csv(RESULTS_LOG_PATH, low_memory=False)
+        except Exception as e:
+            if self.debug:
+                print(f"[WARN] meeting history読み込み失敗: {e}")
+            return pd.DataFrame()
+
+        if entries.empty or results.empty:
+            return pd.DataFrame()
+
+        entries["date"] = entries["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
+        entries["venue"] = entries["venue"].astype(str).map(normalize_venue_name)
+        entries["race_no"] = pd.to_numeric(entries["race_no"], errors="coerce").fillna(0).astype(int)
+        # 同一レースが複数回記録されている場合、一番新しいログを使う
+        if "logged_at" in entries.columns:
+            entries = entries.sort_values("logged_at").drop_duplicates(
+                subset=["date", "venue", "race_no"], keep="last"
+            )
+        else:
+            entries = entries.drop_duplicates(subset=["date", "venue", "race_no"], keep="last")
+
+        results = results.copy()
+        results["date"] = results["date"].astype(str).str.replace(".0", "", regex=False).str.zfill(8)
+        results["venue"] = results["venue"].astype(str).map(normalize_venue_name)
+        results["race_no"] = pd.to_numeric(results["race_no"], errors="coerce").fillna(0).astype(int)
+        results = results[["date", "venue", "race_no", "actual_combo"]].dropna(subset=["actual_combo"])
+        results = results.drop_duplicates(subset=["date", "venue", "race_no"], keep="last")
+
+        merged = entries.merge(results, on=["date", "venue", "race_no"], how="inner")
+        if merged.empty:
+            return pd.DataFrame()
+
+        combo_parts = merged["actual_combo"].astype(str).str.split("-", expand=True)
+        if combo_parts.shape[1] < 3:
+            return pd.DataFrame()
+        merged["_first_lane"] = pd.to_numeric(combo_parts[0], errors="coerce")
+        merged["_second_lane"] = pd.to_numeric(combo_parts[1], errors="coerce")
+        merged["_third_lane"] = pd.to_numeric(combo_parts[2], errors="coerce")
+
+        long_rows = []
+        for lane in range(1, 7):
+            racer_col = f"lane{lane}_racer_no"
+            if racer_col not in merged.columns:
+                continue
+            sub = merged[["date", "venue", "race_no", racer_col, "_first_lane", "_second_lane", "_third_lane"]].copy()
+            sub = sub.rename(columns={racer_col: "racer_no"})
+            sub["racer_no"] = pd.to_numeric(sub["racer_no"], errors="coerce").fillna(0).astype(int)
+            sub["top3"] = (
+                (sub["_first_lane"] == lane) | (sub["_second_lane"] == lane) | (sub["_third_lane"] == lane)
+            ).astype(int)
+            sub["win"] = (sub["_first_lane"] == lane).astype(int)
+            sub = sub.drop(columns=["_first_lane", "_second_lane", "_third_lane"])
+            long_rows.append(sub)
+
+        if not long_rows:
+            return pd.DataFrame()
+
+        long_df = pd.concat(long_rows, ignore_index=True)
+        long_df = long_df[long_df["racer_no"] > 0]
+        long_df = long_df.sort_values(["venue", "date", "race_no"]).reset_index(drop=True)
+        return long_df
+
+    def _reload_meeting_history_if_changed(self) -> None:
+        """
+        predictions_lane_racer_no.csv / results.csv のどちらかのmtimeが変わったら
+        今節成績ライブ計算用のテーブルを再構成する(racer_stats等と同じ軽量mtime方式)。
+        """
+        try:
+            entries_mtime = ENTRIES_LOG_PATH.stat().st_mtime if ENTRIES_LOG_PATH.exists() else 0.0
+            results_mtime = RESULTS_LOG_PATH.stat().st_mtime if RESULTS_LOG_PATH.exists() else 0.0
+        except Exception:
+            return
+
+        if (
+            entries_mtime == self._meeting_entries_mtime
+            and results_mtime == self._meeting_results_mtime
+            and self.meeting_history_long is not None
+        ):
+            return
+
+        if self.debug:
+            print(
+                "[RELOAD_MEETING_HISTORY] mtime changed "
+                f"(entries {self._meeting_entries_mtime}->{entries_mtime}, "
+                f"results {self._meeting_results_mtime}->{results_mtime}), reloading"
+            )
+
+        self.meeting_history_long = self._load_meeting_history()
+        self._meeting_entries_mtime = entries_mtime
+        self._meeting_results_mtime = results_mtime
+
+        self.meeting_raced_dates = {}
+        if self.meeting_history_long is not None and not self.meeting_history_long.empty:
+            for venue, g in self.meeting_history_long.groupby("venue"):
+                self.meeting_raced_dates[venue] = sorted(g["date"].unique().tolist())
+
+    def _compute_meeting_start_date(self, venue_name: str, target_date: str) -> str:
+        """
+        「節は必ず連続した暦日で開催される」という前提で、target_dateの前日から
+        遡り、その会場の既知の開催日(meeting_raced_dates)と連続している限り
+        遡り続けて、節の開始日を推定する。連続が途切れた時点、またはそもそも
+        前日の開催記録が無ければ、target_date自身が開始日(=節1日目)とみなす。
+
+        raw_txtのK-file「第N日」のような確定情報が無いライブ環境向けの近似。
+        """
+        raced_dates = set(self.meeting_raced_dates.get(venue_name, []))
+        try:
+            from datetime import datetime, timedelta
+            cur = datetime.strptime(target_date, "%Y%m%d")
+        except Exception:
+            return target_date
+
+        meeting_start = cur
+        while True:
+            prev_day = meeting_start - timedelta(days=1)
+            prev_str = prev_day.strftime("%Y%m%d")
+            if prev_str in raced_dates:
+                meeting_start = prev_day
+            else:
+                break
+
+        return meeting_start.strftime("%Y%m%d")
+
+    def _add_meeting_form_block_live(self, df: pd.DataFrame, venue_name: str) -> pd.DataFrame:
+        """
+        今節(このシリーズ)これまでの成績特徴量のライブ版。
+        scripts/train_binary_catboost_per_venue_with_racer_stats.py の
+        _add_meeting_form_block()と同じ列を作るが、値は
+        predictions_lane_racer_no.csv + results.csvから動的に計算する。
+        avg_stは元データに無いため常にNaN(→0埋め)。
+
+        対象日の前の節内レース(節開始日〜前日の全レース、当日は今回より前の
+        race_noのみ)における、各レーンの選手番号のtop3率・勝率・n数を計算する。
+        該当データが無ければ(節1日目・ログ未収集等)NaNのままにし、
+        _prepare_xで0埋めされる(学習時のNaN扱いと同じ)。
+        """
+        out = df.copy()
+        venue_name = self._normalize_venue_name(venue_name)
+
+        for lane in range(1, 7):
+            for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
+                out[f"lane{lane}_{suf}"] = np.nan
+
+        if self.meeting_history_long is not None and not self.meeting_history_long.empty and len(out) > 0:
+            try:
+                target_date = str(out["date"].iloc[0])
+                target_race_no = int(out["race_no"].iloc[0]) if "race_no" in out.columns else None
+            except Exception:
+                target_date = None
+                target_race_no = None
+
+            if target_date:
+                meeting_start = self._compute_meeting_start_date(venue_name, target_date)
+                hist = self.meeting_history_long
+                hist_v = hist[hist["venue"] == venue_name]
+                if not hist_v.empty:
+                    mask_prior_days = (hist_v["date"] >= meeting_start) & (hist_v["date"] < target_date)
+                    mask_today = pd.Series(False, index=hist_v.index)
+                    if target_race_no is not None:
+                        mask_today = (hist_v["date"] == target_date) & (hist_v["race_no"] < target_race_no)
+                    so_far = hist_v[mask_prior_days | mask_today]
+
+                    if not so_far.empty:
+                        agg = so_far.groupby("racer_no").agg(
+                            n=("top3", "size"),
+                            top3_rate=("top3", "mean"),
+                            win_rate=("win", "mean"),
+                        )
+                        for lane in range(1, 7):
+                            racer_col = f"lane{lane}_racer_no"
+                            if racer_col not in out.columns:
+                                continue
+                            racer_nos = pd.to_numeric(out[racer_col], errors="coerce").fillna(0).astype(int)
+                            joined = racer_nos.map(
+                                lambda rno: agg.loc[rno] if rno in agg.index else None
+                            )
+                            out[f"lane{lane}_meeting_so_far_n"] = [
+                                (r["n"] if r is not None else np.nan) for r in joined
+                            ]
+                            out[f"lane{lane}_meeting_so_far_top3_rate"] = [
+                                (r["top3_rate"] if r is not None else np.nan) for r in joined
+                            ]
+                            out[f"lane{lane}_meeting_so_far_win_rate"] = [
+                                (r["win_rate"] if r is not None else np.nan) for r in joined
+                            ]
+                            # avg_stは元データに無いため常にNaN(既に上でセット済み)
+
+        for pos, pos_name in [
+            ("first", "combo_first_lane"),
+            ("second", "combo_second_lane"),
+            ("third", "combo_third_lane"),
+        ]:
+            for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
+                out[f"{pos}_{suf}"] = np.nan
+                for lane in range(1, 7):
+                    mask = out[pos_name] == lane
+                    out.loc[mask, f"{pos}_{suf}"] = out.loc[mask, f"lane{lane}_{suf}"]
+
+        return out
 
     def _safe_float(self, v: Any, default: float = 0.0) -> float:
         try:
@@ -535,6 +786,12 @@ class BinaryCatBoostVenueModel:
                 self._reload_motor_stats_if_changed()
             work = self._add_racer_stats_block_live(work)
             work = self._add_motor_stats_block_live(work, requested_venue)
+        # 2026-07-26追加: 今節成績特徴量。meta.jsonにwith_meeting_form_features=True
+        # (=このモデルがmeeting_so_far列で学習されている)場合のみ計算する
+        # (旧モデルには不要な列で、計算コスト・reload頻度を無駄に増やさないため)。
+        if meta.get("with_meeting_form_features"):
+            self._reload_meeting_history_if_changed()
+            work = self._add_meeting_form_block_live(work, requested_venue)
         x = self._prepare_x(work, feature_cols)
 
         raw_scores = model.predict(x, prediction_type="RawFormulaVal")
