@@ -64,11 +64,21 @@ class RaceRecord:
     boats: List[BoatRow]
     y_combo: Optional[str] = None
     trifecta_payout: Optional[int] = None
+    kimarite: Optional[str] = None
 
 
 _NUM = re.compile(r"[-+]?(?:\d+(?:\.\d+)?|\.\d+)")
 _START_RE = re.compile(r"^\s*(\d{2})KBGN\s*$")
 _END_RE = re.compile(r"^\s*(\d{2})KEND\s*$")
+
+# 2026-07-26追加: 決まり手(逃げ/差し/まくり/まくり差し/抜き/恵まれ)。
+# Kファイルでは各レース詳細ブロックの列見出し行
+# ("着 艇 登番 選手名 ﾓｰﾀｰ ﾎﾞｰﾄ 展示 進入 ｽﾀｰﾄﾀｲﾐﾝｸ ﾚｰｽﾀｲﾑ 逃げ")の
+# 末尾トークンとして決まり手が入っている(通常のデータ列ではなく見出しの
+# 一部として埋め込まれている点に注意)。「まくり」は「まくり差し」の
+# prefixになるため、判定順序(長い語を先に)が重要。
+KIMARITE_WORDS = ["まくり差し", "逃げ", "差し", "まくり", "抜き", "恵まれ"]
+_KIMARITE_LINE_RE = re.compile(r"ﾚｰｽﾀｲﾑ\s+(\S+)\s*$")
 
 _ZEN2HAN = str.maketrans({
     "０": "0", "１": "1", "２": "2", "３": "3", "４": "4",
@@ -221,6 +231,21 @@ def _extract_trifecta_map(section_lines: List[str]) -> Dict[int, Tuple[str, int]
         trifecta_map[rno] = (f"{a}-{b}-{c}", payout)
 
     return trifecta_map
+
+
+def _extract_kimarite(block: List[str]) -> Optional[str]:
+    for ln in block[:20]:
+        if "ﾚｰｽﾀｲﾑ" not in ln or "着" not in ln or "艇" not in ln:
+            continue
+        m = _KIMARITE_LINE_RE.search(ln)
+        if not m:
+            continue
+        token = m.group(1).strip()
+        for w in KIMARITE_WORDS:
+            if token.startswith(w):
+                return w
+        return token or None
+    return None
 
 
 def _find_detail_race_starts(section_lines: List[str]) -> List[Tuple[int, int]]:
@@ -415,12 +440,15 @@ def _parse_single_venue_section(
         if rno in trifecta_map:
             y_combo, payout = trifecta_map[rno]
 
+        kimarite = _extract_kimarite(block)
+
         records.append(
             RaceRecord(
                 meta=meta,
                 boats=boats[:6],
                 y_combo=y_combo,
                 trifecta_payout=payout,
+                kimarite=kimarite,
             )
         )
 
