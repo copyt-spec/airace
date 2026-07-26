@@ -241,6 +241,37 @@ def _add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
     out["wind_speed_mps"] = pd.to_numeric(out["wind_speed_mps"], errors="coerce").fillna(0).astype("float32")
     out["wave_cm"] = pd.to_numeric(out["wave_cm"], errors="coerce").fillna(0).astype("float32")
 
+    # 2026-07-26追加: 丸亀特化の検証(ユーザーが丸亀によく行く/思い入れがある
+    # ことがきっかけ)。丸亀データでOLS(HC1)検証したところ、1号艇(course=1)に
+    # 限定した勝率は風速が強いほど有意に下がる(win coef=-0.0164, 95%CI
+    # [-0.0226,-0.0102], n=7509 / top3 coef=-0.0085, CI[-0.0132,-0.0037])。
+    # wind_speed_mps自体は既存モデルにも入っているためCatBoostの分岐で暗黙に
+    # 学習できる可能性はあるが、「コース×風速」の交互作用を明示的な特徴量として
+    # 渡しておくことで、少ない分岐数でも同じ関係を捉えやすくなる(木モデルでも
+    # 明示的な交互作用項を渡すと学習効率が上がることがある、という一般的な手法)。
+    # 会場によらず計算しておき、実際に使うかはmeta.jsonのfeature_colsに委ねる
+    # (他会場の展開特徴量と同じ設計)。
+    for lane in range(1, 7):
+        course_col = f"lane{lane}_course"
+        out[f"lane{lane}_course_wind_interaction"] = (
+            out[course_col].astype("float32") * out["wind_speed_mps"]
+        ).astype("float32")
+        out[f"lane{lane}_course_wave_interaction"] = (
+            out[course_col].astype("float32") * out["wave_cm"]
+        ).astype("float32")
+
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        out[f"{pos}_course_wind_interaction"] = 0.0
+        out[f"{pos}_course_wave_interaction"] = 0.0
+        for lane in range(1, 7):
+            mask = out[pos_name] == lane
+            out.loc[mask, f"{pos}_course_wind_interaction"] = out.loc[mask, f"lane{lane}_course_wind_interaction"]
+            out.loc[mask, f"{pos}_course_wave_interaction"] = out.loc[mask, f"lane{lane}_course_wave_interaction"]
+
     return out
 
 
@@ -419,6 +450,7 @@ def _get_feature_cols(
     include_form_features: bool = True,
     include_development_features: bool = True,
     include_meeting_form_features: bool = True,
+    include_wind_course_interaction_features: bool = False,
 ) -> List[str]:
     candidate_cols = [
         "combo_first_lane", "combo_second_lane", "combo_third_lane",
@@ -482,6 +514,14 @@ def _get_feature_cols(
             for suf in MEETING_FORM_STATS_FEATURE_SUFFIXES:
                 candidate_cols.append(f"{pos}_{suf}")
 
+    if include_wind_course_interaction_features:
+        for lane in range(1, 7):
+            candidate_cols.append(f"lane{lane}_course_wind_interaction")
+            candidate_cols.append(f"lane{lane}_course_wave_interaction")
+        for pos in ["first", "second", "third"]:
+            candidate_cols.append(f"{pos}_course_wind_interaction")
+            candidate_cols.append(f"{pos}_course_wave_interaction")
+
     return [c for c in candidate_cols if c in df.columns]
 
 
@@ -491,6 +531,7 @@ def _prepare_xy(
     include_form_features: bool = True,
     include_development_features: bool = True,
     include_meeting_form_features: bool = True,
+    include_wind_course_interaction_features: bool = False,
 ) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     if "y" not in df.columns:
         raise ValueError("dataset must contain y column")
@@ -503,6 +544,7 @@ def _prepare_xy(
         include_form_features=include_form_features,
         include_development_features=include_development_features,
         include_meeting_form_features=include_meeting_form_features,
+        include_wind_course_interaction_features=include_wind_course_interaction_features,
     )
     if not feature_cols:
         raise RuntimeError("no feature columns found")
@@ -601,6 +643,7 @@ def _train_one_venue(
     include_form_features: bool = True,
     include_development_features: bool = True,
     include_meeting_form_features: bool = True,
+    include_wind_course_interaction_features: bool = False,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -631,12 +674,14 @@ def _train_one_venue(
             include_form_features=include_form_features,
             include_development_features=include_development_features,
             include_meeting_form_features=include_meeting_form_features,
+            include_wind_course_interaction_features=include_wind_course_interaction_features,
         )
         x_valid, y_valid, _ = _prepare_xy(
             valid_raw, with_racer_stats,
             include_form_features=include_form_features,
             include_development_features=include_development_features,
             include_meeting_form_features=include_meeting_form_features,
+            include_wind_course_interaction_features=include_wind_course_interaction_features,
         )
 
         pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
@@ -715,6 +760,9 @@ def _train_one_venue(
                 "with_motor_stats": any("motor_recent8_place_rate_prior" in c for c in feature_cols),
                 "with_development_features": any("exhibit_rank" in c for c in feature_cols),
                 "with_meeting_form_features": any("meeting_so_far" in c for c in feature_cols),
+                "with_wind_course_interaction_features": any(
+                    "course_wind_interaction" in c for c in feature_cols
+                ),
                 "model_suffix": model_suffix,
                 "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
                 "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
@@ -794,6 +842,15 @@ def main() -> None:
              "を学習から除外する。--disable_form_featuresと同様、本番モデル相当を再現して"
              "公平比較したい場合に使う。",
     )
+    parser.add_argument(
+        "--enable_wind_course_interaction_features", action="store_true",
+        help="コース×風速/波高の交互作用特徴量(2026-07-26追加、丸亀のOLS検証で"
+             "1号艇の勝率/複勝率が風速上昇で有意に低下することを確認: "
+             "win coef=-0.0164 [95%CI -0.0226,-0.0102] n=7509, "
+             "top3 coef=-0.0085 [95%CI -0.0132,-0.0037])を学習に追加する。"
+             "他の特徴量と違いデフォルトでは無効(まだROIホールドアウト検証未実施のため)。"
+             "検証用に付けたい時だけこのフラグを指定する。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -830,6 +887,7 @@ def main() -> None:
                 include_form_features=not args.disable_form_features,
                 include_development_features=not args.disable_development_features,
                 include_meeting_form_features=not args.disable_meeting_form_features,
+                include_wind_course_interaction_features=args.enable_wind_course_interaction_features,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

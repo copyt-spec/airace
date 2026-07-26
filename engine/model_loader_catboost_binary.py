@@ -644,6 +644,39 @@ class BinaryCatBoostVenueModel:
         out["wind_speed_mps"] = pd.to_numeric(out["wind_speed_mps"], errors="coerce").fillna(0).astype("float32")
         out["wave_cm"] = pd.to_numeric(out["wave_cm"], errors="coerce").fillna(0).astype("float32")
 
+        # 2026-07-26追加: 丸亀特化の検証用(ユーザーが丸亀によく行く/思い入れが
+        # あることがきっかけ)。丸亀データでOLS(HC1)検証したところ、1号艇
+        # (course=1)に限定した勝率は風速が強いほど有意に下がる
+        # (win coef=-0.0164, 95%CI[-0.0226,-0.0102], n=7509 /
+        #  top3 coef=-0.0085, CI[-0.0132,-0.0037])。
+        # 学習側(scripts/train_binary_catboost_per_venue_with_racer_stats.py)
+        # の_add_feature_block()と同じロジック。exhibit_rank/st_rankと同様、
+        # ここでは常に計算しておき、実際に使うかはロード済みモデルのmeta.jsonの
+        # feature_cols(_prepare_xがそれだけを選ぶ)に委ねる。まだROIホールド
+        # アウト検証前の特徴量のため、この列を使うモデルは本番投入していない
+        # (checked: with_wind_course_interaction_features相当のフラグは
+        # まだどのmeta.jsonにも立っていない)。
+        for lane in range(1, 7):
+            course_col = f"lane{lane}_course"
+            out[f"lane{lane}_course_wind_interaction"] = (
+                out[course_col].astype("float32") * out["wind_speed_mps"]
+            ).astype("float32")
+            out[f"lane{lane}_course_wave_interaction"] = (
+                out[course_col].astype("float32") * out["wave_cm"]
+            ).astype("float32")
+
+        for pos, pos_name in [
+            ("first", "combo_first_lane"),
+            ("second", "combo_second_lane"),
+            ("third", "combo_third_lane"),
+        ]:
+            out[f"{pos}_course_wind_interaction"] = 0.0
+            out[f"{pos}_course_wave_interaction"] = 0.0
+            for lane in range(1, 7):
+                mask = out[pos_name] == lane
+                out.loc[mask, f"{pos}_course_wind_interaction"] = out.loc[mask, f"lane{lane}_course_wind_interaction"]
+                out.loc[mask, f"{pos}_course_wave_interaction"] = out.loc[mask, f"lane{lane}_course_wave_interaction"]
+
         return out
 
     def _add_racer_stats_block_live(self, df: pd.DataFrame) -> pd.DataFrame:
