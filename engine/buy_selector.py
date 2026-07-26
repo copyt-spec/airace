@@ -123,6 +123,20 @@ BASE_VENUE_BUY_CONFIG: Dict[str, Dict[str, float]] = {
 ODDS_BAND_BONUS_1030 = 0.15
 ODDS_BAND_PENALTY_100PLUS = -0.15
 
+# 2026-07-26追加: 「買い目のうち真のケリー的エッジ(prob*odds>1)が無い点を
+# 除外したらROIが上がるか」をscripts/backtest_edge_filter_roi.pyで検証。
+# /simと同じholdoutデータ(23会場・3237レース)で全体ROI 107.18%→116.35%
+# (+9.17pt、利益+97,640円→+167,410円)。会場別では23会場中17会場でプラス
+# だったが、効果の大きさにはばらつきがあった(平和島・びわこ等はむしろ悪化)。
+# そのため全会場一律ではなく、効果が特に大きかった(roi_diff>=+0.15pt)
+# 9会場だけ選択導入する: 下関(+0.587)・蒲郡(+0.300)・浜名湖(+0.285)・
+# 多摩川(+0.280)・鳴門(+0.276)・江戸川(+0.253)・戸田(+0.190)・三国(+0.173)・
+# 若松(+0.167)。[[boat_ai_meeting_form_feature]]の9会場選択導入とは別の
+# 独立した施策(会場の重なりは偶然)。
+EDGE_FILTER_VENUES = {
+    "下関", "蒲郡", "浜名湖", "多摩川", "鳴門", "江戸川", "戸田", "三国", "若松",
+}
+
 
 def _odds_band_score_adj(odds: float) -> float:
     if odds < 10:
@@ -541,6 +555,18 @@ def select_best_bets(
     final_n = max(1, min(20, min(_safe_int(top_n, 20), dynamic_points)))
 
     selected = rows[:final_n]
+
+    # 2026-07-26追加: エッジ絞り込み(EDGE_FILTER_VENUES参照)。選定自体は
+    # 従来通り行ったうえで、対象会場だけ「真のエッジ(prob*odds>1)が無い点」を
+    # 事後的に除外する。除外した結果0点になったレースは素直に見送りとする
+    # (should_skip_raceによる意図的見送りと同様、app/controller.py側の
+    # 「best_betsが空ならもっと粗いフォールバックで埋める」処理には落とさない
+    # ほうが良いため、ここではbackup_rowsへの引き直しはしない)。
+    if _normalize_venue_name(venue or "") in EDGE_FILTER_VENUES:
+        selected = [
+            r for r in selected
+            if float(r.get("prob", 0.0)) * float(r.get("odds_raw", 0.0)) > 1.0
+        ]
 
     for idx, r in enumerate(selected, start=1):
         r["buy_rank"] = idx
