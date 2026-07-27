@@ -1,53 +1,53 @@
 {
   "source": "prediction_results_merged.csv",
   "available_min_date": "20250925",
-  "available_max_date": "20260726",
-  "row_count": 14163,
+  "available_max_date": "20260727",
+  "row_count": 14861,
   "venue_count": 23,
   "stats": {
     "桐生": {
-      "race_count": 178,
-      "buy_count": 818,
-      "hit_count": 43,
-      "hit_rate": 0.05256723716381418,
-      "avg_points": 4.595505617977528,
-      "total_bets": 81800.0,
-      "total_return": 112920.0,
-      "total_profit": 31120.0,
-      "roi": 1.380440097799511
+      "race_count": 188,
+      "buy_count": 858,
+      "hit_count": 45,
+      "hit_rate": 0.05244755244755245,
+      "avg_points": 4.5638297872340425,
+      "total_bets": 85800.0,
+      "total_return": 115580.0,
+      "total_profit": 29780.0,
+      "roi": 1.347086247086247
     },
     "戸田": {
-      "race_count": 244,
-      "buy_count": 982,
-      "hit_count": 38,
-      "hit_rate": 0.038696537678207736,
-      "avg_points": 4.024590163934426,
-      "total_bets": 98200.0,
-      "total_return": 119540.0,
-      "total_profit": 21340.0,
-      "roi": 1.2173116089613034
+      "race_count": 249,
+      "buy_count": 992,
+      "hit_count": 39,
+      "hit_rate": 0.03931451612903226,
+      "avg_points": 3.9839357429718874,
+      "total_bets": 99200.0,
+      "total_return": 121190.0,
+      "total_profit": 21990.0,
+      "roi": 1.2216733870967742
     },
     "江戸川": {
-      "race_count": 179,
-      "buy_count": 805,
+      "race_count": 187,
+      "buy_count": 844,
       "hit_count": 42,
-      "hit_rate": 0.05217391304347826,
-      "avg_points": 4.4972067039106145,
-      "total_bets": 80500.0,
+      "hit_rate": 0.04976303317535545,
+      "avg_points": 4.5133689839572195,
+      "total_bets": 84400.0,
       "total_return": 122150.0,
-      "total_profit": 41650.0,
-      "roi": 1.517391304347826
+      "total_profit": 37750.0,
+      "roi": 1.4472748815165877
     },
     "平和島": {
-      "race_count": 177,
-      "buy_count": 1069,
-      "hit_count": 32,
-      "hit_rate": 0.029934518241347054,
-      "avg_points": 6.03954802259887,
-      "total_bets": 106900.0,
-      "total_return": 75300.0,
-      "total_profit": -31600.0,
-      "roi": 0.7043966323666978
+      "race_count": 189,
+      "buy_count": 1114,
+      "hit_count": 34,
+      "hit_rate": 0.03052064631956912,
+      "avg_points": 5.894179894179894,
+      "total_bets": 111400.0,
+      "total_return": 79190.0,
+      "total_profit": -32210.0,
+      "roi": 0.7108617594254937
     },
     "多摩川": {
       "race_count": 178,
@@ -61,15 +61,15 @@
       "roi": 1.0849945235487404
     },
     "浜名湖": {
-      "race_count": 139,
-      "buy_count": 712,
-      "hit_count": 36,
-      "hit_rate": 0.05056179775280899,
-      "avg_points": 5.122302158273381,
-      "total_bets": 71200.0,
-      "total_return": 103150.0,
-      "total_profit": 31950.0,
-      "roi": 1.4487359550561798
+      "race_count": 152,
+      "buy_count": 776,
+      "hit_count": 37,
+      "hit_rate": 0.04768041237113402,
+      "avg_points": 5.105263157894737,
+      "total_bets": 77600.0,
+      "total_return": 105900.0,
+      "total_profit": 28300.0,
+      "roi": 1.3646907216494846
     },
     "蒲郡": {
       "race_count": 92,
@@ -94,26 +94,26 @@
       "roi": 0.9994444444444445
     },
     "津": {
-      "race_count": 155,
-      "buy_count": 747,
-      "hit_count": 20,
-      "hit_rate": 0.02677376171352075,
-      "avg_points": 4.819354838709677,
-      "total_bets": 74700.0,
-      "total_return": 79140.0,
-      "total_profit": 4440.0,
-      "roi": 1.059437751004016
+      "race_count": 167,
+      "buy_count": 829,
+      "hit_count": 22,
+      "hit_rate": 0.026537997587454766,
+      "avg_points": 4.9640718562874255,
+      "total_bets": 82900.0,
+      "total_return": 83880.0,
+      "total_profit": 980.0,
+      "roi": 1.0118214716525935
     },
     "三国": {
-      "race_count": 109,
-      "buy_count": 543,
-      "hit_count": 24,
-      "hit_rate": 0.04419889502762431,
-      "avg_points": 4.981651376146789,
-      "total_bets": 54300.0,
-      "total_return": 65450.0,
-      "total_profit": 11150.0,
-      "roi": 1.205340699815838
+      "race_count": 121,
+      "buy_count": 622,
+      "hit_count": 25,
+      "hit_rate": 0.04019292604501608,
+      "avg_points": 5.140495867768595,
+      "total_bets": 62200.0,
+      "total_return": 66340.0,
+      "total_profit": 4140.0,
+      "roi": 1.0665594855305467
     },
     "びわこ": {
       "race_count": 107,
@@ -127,15 +127,15 @@
       "roi": 0.8889848812095033
     },
     "住之江": {
-      "race_count": 121,
-      "buy_count": 504,
-      "hit_count": 15,
-      "hit_rate": 0.02976190476190476,
-      "avg_points": 4.1652892561983474,
-      "total_bets": 50400.0,
-      "total_return": 38040.0,
-      "total_profit": -12360.0,
-      "roi": 0.7547619047619047
+      "race_count": 134,
+      "buy_count": 598,
+      "hit_count": 16,
+      "hit_rate": 0.026755852842809364,
+      "avg_points": 4.462686567164179,
+      "total_bets": 59800.0,
+      "total_return": 38900.0,
+      "total_profit": -20900.0,
+      "roi": 0.6505016722408027
     },
     "尼崎": {
       "race_count": 155,
@@ -149,15 +149,15 @@
       "roi": 0.8716328963051252
     },
     "鳴門": {
-      "race_count": 71,
-      "buy_count": 329,
-      "hit_count": 16,
-      "hit_rate": 0.0486322188449848,
-      "avg_points": 4.633802816901408,
-      "total_bets": 32900.0,
-      "total_return": 49300.0,
-      "total_profit": 16400.0,
-      "roi": 1.4984802431610942
+      "race_count": 83,
+      "buy_count": 373,
+      "hit_count": 17,
+      "hit_rate": 0.045576407506702415,
+      "avg_points": 4.493975903614458,
+      "total_bets": 37300.0,
+      "total_return": 50580.0,
+      "total_profit": 13280.0,
+      "roi": 1.3560321715817694
     },
     "丸亀": {
       "race_count": 101,
@@ -182,15 +182,15 @@
       "roi": 0.7415254237288136
     },
     "宮島": {
-      "race_count": 50,
-      "buy_count": 276,
-      "hit_count": 4,
-      "hit_rate": 0.014492753623188406,
-      "avg_points": 5.52,
-      "total_bets": 27600.0,
-      "total_return": 5930.0,
-      "total_profit": -21670.0,
-      "roi": 0.21485507246376812
+      "race_count": 62,
+      "buy_count": 343,
+      "hit_count": 6,
+      "hit_rate": 0.01749271137026239,
+      "avg_points": 5.532258064516129,
+      "total_bets": 34300.0,
+      "total_return": 10570.0,
+      "total_profit": -23730.0,
+      "roi": 0.3081632653061224
     },
     "徳山": {
       "race_count": 71,
@@ -204,37 +204,37 @@
       "roi": 0.8859712230215827
     },
     "下関": {
-      "race_count": 96,
-      "buy_count": 405,
-      "hit_count": 23,
-      "hit_rate": 0.056790123456790124,
-      "avg_points": 4.21875,
-      "total_bets": 40500.0,
-      "total_return": 90430.0,
-      "total_profit": 49930.0,
-      "roi": 2.2328395061728394
+      "race_count": 99,
+      "buy_count": 431,
+      "hit_count": 24,
+      "hit_rate": 0.05568445475638051,
+      "avg_points": 4.353535353535354,
+      "total_bets": 43100.0,
+      "total_return": 93770.0,
+      "total_profit": 50670.0,
+      "roi": 2.1756380510440834
     },
     "若松": {
-      "race_count": 110,
-      "buy_count": 490,
-      "hit_count": 22,
-      "hit_rate": 0.044897959183673466,
-      "avg_points": 4.454545454545454,
-      "total_bets": 49000.0,
-      "total_return": 51580.0,
-      "total_profit": 2580.0,
-      "roi": 1.0526530612244898
+      "race_count": 122,
+      "buy_count": 542,
+      "hit_count": 23,
+      "hit_rate": 0.042435424354243544,
+      "avg_points": 4.442622950819672,
+      "total_bets": 54200.0,
+      "total_return": 52180.0,
+      "total_profit": -2020.0,
+      "roi": 0.962730627306273
     },
     "芦屋": {
-      "race_count": 84,
-      "buy_count": 370,
-      "hit_count": 12,
-      "hit_rate": 0.032432432432432434,
-      "avg_points": 4.404761904761905,
-      "total_bets": 37000.0,
-      "total_return": 24320.0,
-      "total_profit": -12680.0,
-      "roi": 0.6572972972972972
+      "race_count": 96,
+      "buy_count": 426,
+      "hit_count": 14,
+      "hit_rate": 0.03286384976525822,
+      "avg_points": 4.4375,
+      "total_bets": 42600.0,
+      "total_return": 26920.0,
+      "total_profit": -15680.0,
+      "roi": 0.631924882629108
     },
     "福岡": {
       "race_count": 176,
