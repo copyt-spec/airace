@@ -12,8 +12,10 @@ PREDICTIONS_CSV = LOG_DIR / "predictions.csv"
 RESULTS_CSV = LOG_DIR / "results.csv"
 MERGED_CSV = LOG_DIR / "prediction_results_merged.csv"
 LANE_RACER_NO_CSV = LOG_DIR / "predictions_lane_racer_no.csv"
+LANE_TILT_CSV = LOG_DIR / "predictions_lane_tilt.csv"
 
 _lane_racer_no_keys_cache: "set[tuple[str, str, int]] | None" = None
+_lane_tilt_keys_cache: "set[tuple[str, str, int]] | None" = None
 
 
 def _now_iso() -> str:
@@ -206,6 +208,78 @@ def save_lane_racer_no(
         row[f"lane{lane}_racer_no"] = int(lane_racer_no.get(lane, 0))
 
     _append_csv_row(LANE_RACER_NO_CSV, fieldnames, row)
+    existing_keys.add(key)
+
+
+def _load_lane_tilt_keys() -> "set[tuple[str, str, int]]":
+    """既にlane tiltを記録済みの(date, venue, race_no)集合を返す(重複記録防止)。"""
+    global _lane_tilt_keys_cache
+    if _lane_tilt_keys_cache is not None:
+        return _lane_tilt_keys_cache
+
+    keys: "set[tuple[str, str, int]]" = set()
+    if LANE_TILT_CSV.exists():
+        with open(LANE_TILT_CSV, "r", encoding="utf-8", newline="") as f:
+            reader = csv.DictReader(f)
+            for row in reader:
+                try:
+                    keys.add((
+                        _safe_str(row.get("date", "")),
+                        _safe_str(row.get("venue", "")),
+                        int(float(row.get("race_no", 0) or 0)),
+                    ))
+                except Exception:
+                    continue
+
+    _lane_tilt_keys_cache = keys
+    return keys
+
+
+def save_lane_tilt(
+    *,
+    date: str,
+    venue: str,
+    race_no: int,
+    lane_tilt: Dict[int, Optional[float]],
+) -> None:
+    """
+    2026-07-29追加: チルト角度(モーターの取り付け角度、展示が良くても
+    角度が大きいと操舵性が落ちるという仮説の検証用)を、今後のライブ予測ぶんに
+    ついて蓄積するためのログ。
+
+    raw_txt(過去結果ファイル)にはチルト角度の記録が無いため、過去に遡って
+    バックテストすることはできない。今後このログが十分溜まった時点で初めて
+    予測精度への寄与を検証できる([[boat_ai_kimarite_wind_chaos_detection]]や
+    [[boat_ai_marugame_wind_course_feature]]と同じく、n>=500目安の蓄積を待つ)。
+
+    predictions.csv本体には追記しない(save_lane_racer_noと同じ理由)。
+    1レース=1行の別ファイルに保存し、後からdate/venue/race_noで突き合わせる。
+
+    lane_tilt: {1: -0.5, 2: 0.0, ...} のようなlane(1-6)->tilt角度(度)の辞書。
+    値がNone(取得失敗/未取得/パース不能)のレーンが1つでもあれば記録しない
+    (中途半端なデータで学習・分析に混入させないため)。
+    """
+    if not lane_tilt or len(lane_tilt) != 6:
+        return
+    if any(lane_tilt.get(lane) is None for lane in range(1, 7)):
+        return
+
+    key = (_safe_str(date), _safe_str(venue), int(race_no))
+    existing_keys = _load_lane_tilt_keys()
+    if key in existing_keys:
+        return
+
+    fieldnames = ["logged_at", "date", "venue", "race_no"] + [f"lane{i}_tilt" for i in range(1, 7)]
+    row = {
+        "logged_at": _now_iso(),
+        "date": _safe_str(date),
+        "venue": _safe_str(venue),
+        "race_no": int(race_no),
+    }
+    for lane in range(1, 7):
+        row[f"lane{lane}_tilt"] = float(lane_tilt.get(lane))  # type: ignore[arg-type]
+
+    _append_csv_row(LANE_TILT_CSV, fieldnames, row)
     existing_keys.add(key)
 
 

@@ -2,11 +2,12 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import traceback
 from datetime import datetime, timedelta
 from pathlib import Path
 from zoneinfo import ZoneInfo
-from typing import Any, Dict, List, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 import pandas as pd
 from flask import Flask, jsonify, render_template, request
@@ -17,7 +18,7 @@ except Exception as e:
     print("[IMPORT_ERROR]", e)
     RaceController = None  # type: ignore
 
-from engine.prediction_logger import build_prediction_rows, save_prediction_rows, save_lane_racer_no
+from engine.prediction_logger import build_prediction_rows, save_prediction_rows, save_lane_racer_no, save_lane_tilt
 from engine.race_scenario import build_race_scenario
 from engine.venue_registry import (
     VENUE_MASTER,
@@ -543,6 +544,25 @@ def _build_race_signal(
     }
 
 
+def _parse_tilt(raw: Any) -> Optional[float]:
+    """beforeinfoの生チルト文字列(例: '-0.5', '0.0', '1.0')をfloatへ変換する。
+    符号付き小数を許容し、取得できない/パース不能な場合はNoneを返す
+    (「取得失敗」「未取得」「」などの文字列はここで弾かれる)。
+    """
+    if raw is None:
+        return None
+    s = str(raw).strip()
+    if not s:
+        return None
+    m = re.search(r"-?\d+(?:\.\d+)?", s)
+    if not m:
+        return None
+    try:
+        return float(m.group(0))
+    except Exception:
+        return None
+
+
 def _save_prediction_log(
     *,
     date: str,
@@ -553,6 +573,7 @@ def _save_prediction_log(
     grouped_odds: Dict[str, Any],
     model_mode: str,
     df120_rows: List[Dict[str, Any]] | None = None,
+    beforeinfo: Dict[str, Any] | None = None,
 ) -> None:
     try:
         prediction_rows = build_prediction_rows(
@@ -586,6 +607,27 @@ def _save_prediction_log(
             )
     except Exception as log_e:
         print("[WARN] lane racer_no log save failed:", log_e)
+
+    # 2026-07-29追加: チルト角度(モーター取り付け角度)を今後の分析用に記録する。
+    # raw_txtには存在しないため、これから溜まっていくライブ予測ぶんでしか
+    # 検証できない(engine.prediction_logger.save_lane_tiltを参照)。
+    # beforeinfoはfetch_beforeinfo_venue()の生の戻り値で、{1: {"tilt": "...", ...}, ...}
+    # という int キーの辞書(app/controller.py経由の正規化前の生データ)。
+    try:
+        if isinstance(beforeinfo, dict):
+            lane_tilt: Dict[int, Optional[float]] = {}
+            for lane in range(1, 7):
+                row = beforeinfo.get(lane) or beforeinfo.get(str(lane)) or {}
+                raw_tilt = row.get("tilt") if isinstance(row, dict) else None
+                lane_tilt[lane] = _parse_tilt(raw_tilt)
+            save_lane_tilt(
+                date=date,
+                venue=venue,
+                race_no=race_no,
+                lane_tilt=lane_tilt,
+            )
+    except Exception as log_e:
+        print("[WARN] lane tilt log save failed:", log_e)
 
 
 def _render_venue_page(venue_name: str):
@@ -678,6 +720,7 @@ def _render_venue_page(venue_name: str):
                 grouped_odds=grouped_odds,
                 model_mode=resolved_model_mode,
                 df120_rows=bundle.get("df120_rows", []) or [],
+                beforeinfo=beforeinfo,
             )
 
         races = _blank_races()
