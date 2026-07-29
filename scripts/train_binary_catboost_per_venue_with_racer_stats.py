@@ -38,6 +38,22 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from engine.venue_registry import VENUE_ORDER, normalize_venue_name  # noqa: E402
 DATASET_PATH = PROJECT_ROOT / "data" / "datasets" / "trifecta_train.csv"
+
+# 2026-07-30追加: scripts/sweep_hyperparameters.py --all の結果、depth(木の深さ)を
+# 現行本番の8から6に浅くすると全体ROIが120.33%→132.40%(+12.07pt、利益+95,020円)
+# 改善した(data/logs/hyperparameter_sweep_all_venues.csv)。ただし全会場一律ではなく
+# 会場ごとにばらつきがあったため(会場単位のprofit差の95%CI=[-195.7円,+8458.3円]で
+# ギリギリ有意ではない)、[[boat_ai_roi_findings]]のedge_filter・meeting_form同様、
+# 実際に改善した13会場だけに選択導入する(ユーザー了承のうえ2026-07-30決定)。
+# 大口・高信頼度会場(戸田336レース+18,190円/+20.13pt、桐生188レース+3,510円/+5.27pt、
+# 江戸川214レース+2,530円/+8.97pt)が3つとも改善で一致していたことが決め手。
+# 悪化した多摩川(-17,380円)・蒲郡・福岡・浜名湖・鳴門・若松・三国・徳山・芦屋・宮島と
+# 唐津(未検証)はdepth=8のまま維持する。--use_tuned_depth を付けたときだけ適用される
+# (デフォルトでは従来通り--depthの値を全会場に一律適用、後方互換)。
+VENUE_DEPTH_OVERRIDES: Dict[str, int] = {
+    "丸亀": 6, "びわこ": 6, "江戸川": 6, "桐生": 6, "児島": 6, "大村": 6,
+    "尼崎": 6, "下関": 6, "平和島": 6, "戸田": 6, "津": 6, "常滑": 6, "住之江": 6,
+}
 RACER_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "racer_point_in_time_stats.csv"
 # 2026-07-21追加: 選手の直近の調子(recent5_*)とモーターの直近の調子
 # (motor_recent8_*)。scripts/analyze_racer_recent_form.py /
@@ -884,6 +900,13 @@ def main() -> None:
              "係数-0.907 [95%CI -1.016,-0.798] と強く有意)を学習に追加する。"
              "他の新機能と同様デフォルトでは無効(ROIホールドアウト検証未実施のため)。",
     )
+    parser.add_argument(
+        "--use_tuned_depth", action="store_true",
+        help="scripts/sweep_hyperparameters.py --all の検証(2026-07-30)で改善が確認できた"
+             "13会場(VENUE_DEPTH_OVERRIDES参照)だけdepth=6を使う。対象外の会場は"
+             "従来通り--depthの値(デフォルト8)を使う。指定しない場合は全会場に"
+             "--depthを一律適用する(従来通りの後方互換動作)。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -907,10 +930,16 @@ def main() -> None:
 
     for v in venues:
         try:
+            venue_depth = args.depth
+            if args.use_tuned_depth:
+                venue_depth = VENUE_DEPTH_OVERRIDES.get(normalize_venue_name(v), args.depth)
+                if venue_depth != args.depth:
+                    print(f"[{normalize_venue_name(v)}] --use_tuned_depth によりdepth={venue_depth}を使用(通常は{args.depth})")
+
             _train_one_venue(
                 src=src, venue=v, racer_stats=racer_stats,
                 test_size=args.test_size, random_state=args.random_state,
-                iterations=args.iterations, depth=args.depth,
+                iterations=args.iterations, depth=venue_depth,
                 learning_rate=args.learning_rate, verbose_eval=args.verbose_eval,
                 skip_baseline_rerun=skip_baseline_rerun,
                 feature_weight_targets=feature_weight_targets,
