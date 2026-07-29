@@ -304,6 +304,14 @@ def _add_racer_stats_block(df: pd.DataFrame, racer_stats: pd.DataFrame) -> pd.Da
         out[f"lane{lane}_win_rate_prior"] = joined["win_rate_prior"].to_numpy()
         out[f"lane{lane}_place_rate_prior"] = joined["place_rate_prior"].to_numpy()
         out[f"lane{lane}_avg_st_prior"] = joined["avg_st_prior"].to_numpy()
+        # 2026-07-29追加: ST安定性(標準偏差)。scripts/analyze_st_consistency.pyで
+        # OLS検証済み(n=1,050,137、course固定効果・win_rate_prior・avg_st_prior統制
+        # 済みでもstd_st_prior係数-0.907、t=-16.29と強く有意)。racer_stats側に
+        # 列が無い(再生成前の古いracer_point_in_time_stats.csv)場合はNaNにフォールバック。
+        if "std_st_prior" in joined.columns:
+            out[f"lane{lane}_st_std_prior"] = joined["std_st_prior"].to_numpy()
+        else:
+            out[f"lane{lane}_st_std_prior"] = np.nan
         # 2026-07-21追加: 選手の直近の調子(ホットハンド、analyze_racer_recent_form.py参照)
         if "recent5_place_rate_prior" in joined.columns:
             out[f"lane{lane}_recent5_races_prior"] = joined["recent5_races_prior"].to_numpy()
@@ -394,8 +402,16 @@ RACER_STATS_BASE_FEATURE_SUFFIXES = [
 RACER_STATS_FORM_FEATURE_SUFFIXES = [
     "recent5_races_prior", "recent5_place_rate_prior",
 ]
+# 2026-07-29追加: ST安定性(標準偏差)。他の新機能(wind_course_interaction等)と
+# 同様、検証済みだがローカル再学習+ROIバックテストが済むまではデフォルトOFF
+# (include_st_std_feature=Falseで_get_feature_colsから除外)にしておく。
+RACER_STATS_ST_STD_FEATURE_SUFFIXES = ["st_std_prior"]
 # 後方互換: 既存コードがRACER_STATS_FEATURE_SUFFIXES(全部入り)を参照している箇所向け
-RACER_STATS_FEATURE_SUFFIXES = RACER_STATS_BASE_FEATURE_SUFFIXES + RACER_STATS_FORM_FEATURE_SUFFIXES
+RACER_STATS_FEATURE_SUFFIXES = (
+    RACER_STATS_BASE_FEATURE_SUFFIXES
+    + RACER_STATS_FORM_FEATURE_SUFFIXES
+    + RACER_STATS_ST_STD_FEATURE_SUFFIXES
+)
 
 MOTOR_STATS_FEATURE_SUFFIXES = [
     "recent8_races_prior", "recent8_place_rate_prior",
@@ -451,6 +467,7 @@ def _get_feature_cols(
     include_development_features: bool = True,
     include_meeting_form_features: bool = True,
     include_wind_course_interaction_features: bool = False,
+    include_st_std_feature: bool = False,
 ) -> List[str]:
     candidate_cols = [
         "combo_first_lane", "combo_second_lane", "combo_third_lane",
@@ -492,6 +509,8 @@ def _get_feature_cols(
     if with_racer_stats:
         racer_suffixes = RACER_STATS_BASE_FEATURE_SUFFIXES + (
             RACER_STATS_FORM_FEATURE_SUFFIXES if include_form_features else []
+        ) + (
+            RACER_STATS_ST_STD_FEATURE_SUFFIXES if include_st_std_feature else []
         )
         for lane in range(1, 7):
             for suf in racer_suffixes:
@@ -532,6 +551,7 @@ def _prepare_xy(
     include_development_features: bool = True,
     include_meeting_form_features: bool = True,
     include_wind_course_interaction_features: bool = False,
+    include_st_std_feature: bool = False,
 ) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     if "y" not in df.columns:
         raise ValueError("dataset must contain y column")
@@ -545,6 +565,7 @@ def _prepare_xy(
         include_development_features=include_development_features,
         include_meeting_form_features=include_meeting_form_features,
         include_wind_course_interaction_features=include_wind_course_interaction_features,
+        include_st_std_feature=include_st_std_feature,
     )
     if not feature_cols:
         raise RuntimeError("no feature columns found")
@@ -644,6 +665,7 @@ def _train_one_venue(
     include_development_features: bool = True,
     include_meeting_form_features: bool = True,
     include_wind_course_interaction_features: bool = False,
+    include_st_std_feature: bool = False,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -675,6 +697,7 @@ def _train_one_venue(
             include_development_features=include_development_features,
             include_meeting_form_features=include_meeting_form_features,
             include_wind_course_interaction_features=include_wind_course_interaction_features,
+            include_st_std_feature=include_st_std_feature,
         )
         x_valid, y_valid, _ = _prepare_xy(
             valid_raw, with_racer_stats,
@@ -682,6 +705,7 @@ def _train_one_venue(
             include_development_features=include_development_features,
             include_meeting_form_features=include_meeting_form_features,
             include_wind_course_interaction_features=include_wind_course_interaction_features,
+            include_st_std_feature=include_st_std_feature,
         )
 
         pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
@@ -763,6 +787,7 @@ def _train_one_venue(
                 "with_wind_course_interaction_features": any(
                     "course_wind_interaction" in c for c in feature_cols
                 ),
+                "with_st_std_feature": any("st_std_prior" in c for c in feature_cols),
                 "model_suffix": model_suffix,
                 "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
                 "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
@@ -851,6 +876,14 @@ def main() -> None:
              "他の特徴量と違いデフォルトでは無効(まだROIホールドアウト検証未実施のため)。"
              "検証用に付けたい時だけこのフラグを指定する。",
     )
+    parser.add_argument(
+        "--enable_st_std_feature", action="store_true",
+        help="選手ごとのST安定性(標準偏差、2026-07-29追加、"
+             "scripts/analyze_st_consistency.pyのOLS検証で n=1,050,137、"
+             "course固定効果・win_rate_prior・avg_st_prior統制済みでも"
+             "係数-0.907 [95%CI -1.016,-0.798] と強く有意)を学習に追加する。"
+             "他の新機能と同様デフォルトでは無効(ROIホールドアウト検証未実施のため)。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -888,6 +921,7 @@ def main() -> None:
                 include_development_features=not args.disable_development_features,
                 include_meeting_form_features=not args.disable_meeting_form_features,
                 include_wind_course_interaction_features=args.enable_wind_course_interaction_features,
+                include_st_std_feature=args.enable_st_std_feature,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")

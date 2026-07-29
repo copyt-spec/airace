@@ -27,6 +27,10 @@ RACER_STATS_FEATURE_SUFFIXES = [
     "races_prior", "win_rate_prior", "place_rate_prior",
     "avg_st_prior", "course_place_rate_prior", "course_avg_st_prior",
     "recent5_races_prior", "recent5_place_rate_prior",
+    # 2026-07-29追加: ST安定性(標準偏差)。まだROIホールドアウト検証前だが、
+    # モデルのfeature_cols(meta.json)にlane{n}_st_std_priorが含まれる場合のみ
+    # 実際に使われる(_get_feature_colsのinclude_st_std_feature=Falseがデフォルト)。
+    "st_std_prior",
 ]
 
 MOTOR_STATS_FEATURE_SUFFIXES = [
@@ -707,6 +711,9 @@ class BinaryCatBoostVenueModel:
                 ]
                 out[f"lane{lane}_avg_st_prior"] = [
                     (r["avg_st_prior"] if r is not None else np.nan) for r in joined
+                ]
+                out[f"lane{lane}_st_std_prior"] = [
+                    (r.get("std_st_prior", np.nan) if r is not None else np.nan) for r in joined
                 ]
                 out[f"lane{lane}_recent5_races_prior"] = [
                     (r.get("recent5_races_prior", np.nan) if r is not None else np.nan) for r in joined

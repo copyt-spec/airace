@@ -9,8 +9,8 @@ data/datasets/racer_race_history.csv (選手×レースのファクトテーブ�
 
 出力: data/datasets/racer_point_in_time_stats.csv
   racer_no, date, races_prior, win_rate_prior, place_rate_prior, avg_st_prior,
-  course{1-6}_races_prior, course{1-6}_place_rate_prior, course{1-6}_avg_st_prior,
-  recent5_races_prior, recent5_place_rate_prior
+  std_st_prior, course{1-6}_races_prior, course{1-6}_place_rate_prior,
+  course{1-6}_avg_st_prior, recent5_races_prior, recent5_place_rate_prior
 
 date は「この日"から"適用される、この日より前の実績に基づく統計」という意味。
 学習データにmerge_asof(direction='backward', 厳密にはこの日"以前"の最新の値)で
@@ -45,6 +45,11 @@ def main() -> None:
     # 日付粒度に集約(同日に複数レースがあっても「その日の実績」としてまとめる)
     df["is_win"] = (df["finish"] == 1).astype(int)
     df["is_top3"] = (df["finish"] <= 3).astype(int)
+    # 2026-07-29追加: ST安定性(std_st_prior)を計算するため二乗和も集計する。
+    # scripts/analyze_st_consistency.py でOLS検証済み(n=1,050,137、course固定効果・
+    # win_rate_prior・avg_st_prior統制): std_st_prior係数-0.907(t=-16.29、
+    # 95%CI[-1.016,-0.798])で、平均STや勝率とは独立にis_top3を予測する。
+    df["st_sq"] = df["st"] ** 2
 
     daily = (
         df.groupby(["racer_no", "date"], as_index=False)
@@ -53,6 +58,7 @@ def main() -> None:
             wins=("is_win", "sum"),
             top3=("is_top3", "sum"),
             st_sum=("st", "sum"),
+            st_sq_sum=("st_sq", "sum"),
             st_count=("st", "count"),
         )
     )
@@ -91,6 +97,7 @@ def main() -> None:
     cum_wins = g["wins"].cumsum()
     cum_top3 = g["top3"].cumsum()
     cum_st_sum = g["st_sum"].cumsum()
+    cum_st_sq_sum = g["st_sq_sum"].cumsum()
     cum_st_count = g["st_count"].cumsum()
 
     # 「当日より前」= 累積(当日含む) - 当日分
@@ -98,11 +105,17 @@ def main() -> None:
     daily["wins_prior"] = cum_wins - daily["wins"]
     daily["top3_prior"] = cum_top3 - daily["top3"]
     daily["st_sum_prior"] = cum_st_sum - daily["st_sum"]
+    daily["st_sq_sum_prior"] = cum_st_sq_sum - daily["st_sq_sum"]
     daily["st_count_prior"] = cum_st_count - daily["st_count"]
 
     daily["win_rate_prior"] = np.where(daily["races_prior"] > 0, daily["wins_prior"] / daily["races_prior"], np.nan)
     daily["place_rate_prior"] = np.where(daily["races_prior"] > 0, daily["top3_prior"] / daily["races_prior"], np.nan)
     daily["avg_st_prior"] = np.where(daily["st_count_prior"] > 0, daily["st_sum_prior"] / daily["st_count_prior"], np.nan)
+    # ST安定性(標準偏差)。オンライン分散公式 Var=E[X^2]-E[X]^2 を使い、
+    # 浮動小数点誤差でわずかに負になり得る分をclipで0にガードする。
+    _mean_sq_prior = np.where(daily["st_count_prior"] > 0, daily["st_sq_sum_prior"] / daily["st_count_prior"], np.nan)
+    _var_prior = _mean_sq_prior - daily["avg_st_prior"] ** 2
+    daily["std_st_prior"] = np.sqrt(np.clip(_var_prior, a_min=0.0, a_max=None))
 
     for c in range(1, 7):
         cum_c_races = g[f"course{c}_races"].cumsum()
@@ -141,6 +154,7 @@ def main() -> None:
 
     keep_cols = [
         "racer_no", "date", "races_prior", "win_rate_prior", "place_rate_prior", "avg_st_prior",
+        "std_st_prior",
         "recent5_races_prior", "recent5_place_rate_prior",
     ]
     for c in range(1, 7):
