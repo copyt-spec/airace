@@ -6,7 +6,9 @@
   "with_motor_stats": true,
   "with_development_features": true,
   "with_meeting_form_features": true,
-  "model_suffix": "_meetingform",
+  "with_wind_course_interaction_features": false,
+  "with_st_std_feature": false,
+  "model_suffix": "",
   "feature_weight_targets": null,
   "feature_weight_multiplier": 1.0,
   "dataset_path": "/Users/takedanaoya/boat_ai/boat_ai/data/datasets/trifecta_train.csv",
@@ -246,15 +248,15 @@
   ],
   "params": {
     "iterations": 600,
-    "depth": 8,
+    "depth": 6,
     "learning_rate": 0.05,
     "random_state": 42,
     "test_size": 0.2,
     "scale_pos_weight": 119.0
   },
   "metrics": {
-    "valid_logloss": 0.44675419080868206,
-    "valid_auc": 0.8378755985825128
+    "valid_logloss": 0.4410965297551057,
+    "valid_auc": 0.8505565994736872
   },
   "baseline_rerun_metrics_same_split": null
 }
