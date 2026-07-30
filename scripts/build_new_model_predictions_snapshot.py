@@ -41,6 +41,7 @@ data/logs/predictions_with_racer_stats_{venue}.csv が最新化されている�
 
 from __future__ import annotations
 
+import argparse
 import sys
 from datetime import datetime
 from pathlib import Path
@@ -59,6 +60,12 @@ LOG_DIR = PROJECT_ROOT / "data" / "logs"
 OUT_CSV = LOG_DIR / "predictions_new_model_snapshot.csv"
 MODEL_NAME = "binary_catboost_venue_devfeatures_snapshot"
 
+# 2026-07-30追加: 「直近一年間を最新の予想モデルで実施した結果にsimを直したい」
+# という要望に応えるため、scripts/build_widehold_snapshot_models.py が生成する
+# predictions_with_racer_stats_{venue}_widehold.csv (広いtest_sizeで各会場の
+# 現行本番構成をそのまま再現したholdout予測)を材料にできるよう、読み込み元の
+# suffixを指定できるようにした。未指定なら従来通り(suffix無し=現行本番モデル)。
+
 FIELDNAMES = [
     "logged_at", "date", "venue", "race_no", "combo",
     "rank_prob", "prob", "prob_pct", "odds",
@@ -66,8 +73,8 @@ FIELDNAMES = [
 ]
 
 
-def _load_venue_predictions(venue: str) -> pd.DataFrame:
-    path = LOG_DIR / f"predictions_with_racer_stats_{venue}.csv"
+def _load_venue_predictions(venue: str, pred_suffix: str = "") -> pd.DataFrame:
+    path = LOG_DIR / f"predictions_with_racer_stats_{venue}{pred_suffix}.csv"
     if not path.exists():
         return pd.DataFrame()
     df = pd.read_csv(path, low_memory=False)
@@ -122,15 +129,30 @@ def _build_race_rows(date: str, venue: str, race_no: int, race_df: pd.DataFrame,
 
 
 def main() -> None:
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--pred-suffix", default="",
+        help="読み込み元 predictions_with_racer_stats_{venue}{suffix}.csv のsuffix"
+             "(例: _widehold)。未指定なら従来通り現行本番モデルのファイルを使う。",
+    )
+    parser.add_argument(
+        "--out", default=str(OUT_CSV),
+        help="出力先パス。未指定ならpredictions_new_model_snapshot.csvを上書きする"
+             "(scripts/build_combined_predictions_for_sim.pyが読む既定のパスと同じ)。",
+    )
+    args = parser.parse_args()
+    pred_suffix = args.pred_suffix
+    out_path = Path(args.out)
+
     logged_at = datetime.now().isoformat(timespec="seconds")
     all_rows: List[Dict[str, Any]] = []
     total_races = 0
 
     for venue in VENUE_ORDER:
         venue = normalize_venue_name(venue)
-        df = _load_venue_predictions(venue)
+        df = _load_venue_predictions(venue, pred_suffix)
         if df.empty:
-            print(f"[SKIP] {venue}: predictions_with_racer_stats_{venue}.csv が無いか空です")
+            print(f"[SKIP] {venue}: predictions_with_racer_stats_{venue}{pred_suffix}.csv が無いか空です")
             continue
 
         n_races = 0
@@ -150,10 +172,11 @@ def main() -> None:
         )
 
     out_df = pd.DataFrame(all_rows, columns=FIELDNAMES)
-    out_df.to_csv(OUT_CSV, index=False, encoding="utf-8-sig")
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    out_df.to_csv(out_path, index=False, encoding="utf-8-sig")
 
     print("=" * 80)
-    print("saved:", OUT_CSV)
+    print("saved:", out_path)
     print("rows       :", len(out_df))
     print("races      :", total_races)
     print("selected   :", int(out_df["is_selected"].sum()))
