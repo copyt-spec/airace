@@ -51,6 +51,15 @@ data/datasets/**/*.csv
 data/datasets/*.partial_discard
 data/datasets/trifecta_train_by_venue_old/
 data/datasets/trifecta_train_by_venue_partial_incomplete/
+# 2026-07-31追加: split_trifecta_train_by_venue.py等の書き込み中に生成される
+# 一時/退避ファイル。以前.write_state・.merged_pkl・.CORRUPTED_backup・
+# .rebuildingが誤ってgit add -Aでコミットされ、GitHubのファイルサイズ上限
+# (戸田.csv.merged_pklが726MB)でpushが弾かれる事故が起きたため明示的に除外。
+data/datasets/**/*.write_state
+data/datasets/**/*.merged_pkl
+data/datasets/**/*.CORRUPTED_backup
+data/datasets/**/*.rebuilding
+data/datasets/*.tmp2
 
 # =========================
 # ログ・シミュレーション
