@@ -810,6 +810,10 @@
                   <div class="k">買い目数</div>
                   <div class="v">{{ race_signal.get("best_count", 0) }}</div>
                 </div>
+                <div class="signalMini">
+                  <div class="k">想定回収率</div>
+                  <div class="v">{{ "%.1f"|format(race_signal.get("expected_roi_pct", 0.0)) }}%</div>
+                </div>
               </div>
             </div>
           </div>

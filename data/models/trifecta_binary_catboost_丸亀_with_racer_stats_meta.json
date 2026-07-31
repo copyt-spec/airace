@@ -12,11 +12,11 @@
   "feature_weight_targets": null,
   "feature_weight_multiplier": 1.0,
   "dataset_path": "/Users/takedanaoya/boat_ai/boat_ai/data/datasets/trifecta_train.csv",
-  "rows_total": 900600,
-  "rows_train": 720240,
-  "rows_valid": 180360,
-  "positive_total": 7505,
-  "negative_total": 893095,
+  "rows_total": 912000,
+  "rows_train": 730080,
+  "rows_valid": 181920,
+  "positive_total": 7600,
+  "negative_total": 904400,
   "feature_cols": [
     "combo_first_lane",
     "combo_second_lane",
@@ -255,8 +255,8 @@
     "scale_pos_weight": 119.0
   },
   "metrics": {
-    "valid_logloss": 0.41205713363855506,
-    "valid_auc": 0.8712970260540848
+    "valid_logloss": 0.411343578742802,
+    "valid_auc": 0.8706372874683669
   },
   "baseline_rerun_metrics_same_split": null
 }

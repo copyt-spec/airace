@@ -49,19 +49,27 @@ SNAPSHOT_CSV = LOG_DIR / "predictions_new_model_snapshot.csv"
 LIVE_PREDICTIONS_CSV = LOG_DIR / "predictions.csv"
 OUT_CSV = LOG_DIR / "predictions_combined_for_sim.csv"
 
-# 新モデル(展開特徴量追加)を本番投入した日は20260722だが、daily-prediction-crawl
-# による0721分のバックフィルは0723 23:31以降(=投入後)に新モデルで実行された
-# ことをlogged_atで確認済みのため、2026-07-24にカットオフを0721まで前倒しした。
-# この日以降のpredictions.csvの行は新モデルによる本物のログなのでそのまま使う。
-CUTOFF_DATE = "20260721"
+# 2026-07-31追加(重要): 2026-07-30にdepth=6+特徴量構成修正版モデルへの
+# widehold全期間再学習を行い、/simを新モデル基準に作り直した([[boat_ai_sim_widehold_rebuild]]、
+# scripts/build_widehold_snapshot_models.py参照)。この新モデルはまだRenderにpush
+# していないため、predictions.csv(実ログ)は当面古いモデルのままログされ続ける。
+# この状態でCUTOFF_DATEを過去日のままにしておくと、scripts/update_results_daily.py
+# の日次自動実行(cronでこのスクリプトを引数無しで呼ぶ)のたびに古いモデルの
+# 実ログがsimに混入してしまう(実際に2026-07-31の自動実行で発生し、
+# predictions_combined_for_sim.csvが汚染される事故があった)。
+# そのため、実際にRenderへpushして本番が新モデルに切り替わるまでは、
+# CUTOFF_DATEを未来の安全な日付に固定し、常にwidehold静的スナップショットだけを
+# 使うようにする。**Renderへpushしたら、この値を実際のpush(デプロイ)日に
+# 更新すること。** 更新を忘れると、新モデルが本番稼働しているのにsimがいつまでも
+# 静的スナップショットのままになってしまう。
+CUTOFF_DATE = "20261231"
 
-# 2026-07-26追加: 「今節成績」特徴量は全会場一律ではなく9会場だけ選択導入した
-# (scripts/build_meeting_form_predictions_snapshot.py参照)。上記の
-# snapshot/liveの合成(全会場共通)を土台にしたうえで、この9会場だけ
-# デプロイ日(MEETING_FORM_CUTOFF_DATE)より前をmeeting_form版のholdout
-# スナップショットで上書きする2段目のレイヤーとして扱う。デプロイ日以降は
-# 土台側のlive(predictions.csv実ログ、新モデルによる本物の予測)がそのまま
-# 使われるので、ここでは触らない。
+# 2026-07-26追加、2026-07-31にデフォルト無効化: 「今節成績」特徴量は全会場一律
+# ではなく9会場だけ選択導入していた(scripts/build_meeting_form_predictions_snapshot.py)。
+# widehold再学習(2026-07-30〜)は各会場の現行本番構成(9会場のmeeting_form含む)を
+# そのまま引き継いでいるため、この2段目レイヤーは不要になった。二重適用すると
+# 古い(test_size=0.20の狭い)meeting_formスナップショットでwidehold分が上書きされて
+# しまうため、既定では適用しない(--apply-meeting-form-layerを明示した時だけ適用)。
 MEETING_FORM_SNAPSHOT_CSV = LOG_DIR / "predictions_meetingform_snapshot.csv"
 MEETING_FORM_VENUES = [
     "戸田", "江戸川", "丸亀", "びわこ", "若松", "下関", "芦屋", "鳴門", "浜名湖",
@@ -82,8 +90,14 @@ def main() -> None:
     parser.add_argument("--meeting-form-snapshot", default=str(MEETING_FORM_SNAPSHOT_CSV))
     parser.add_argument("--meeting-form-cutoff-date", default=MEETING_FORM_CUTOFF_DATE, help="YYYYMMDD")
     parser.add_argument(
+        "--apply-meeting-form-layer", action="store_true",
+        help="2026-07-31以前のデフォルト挙動に戻し、9会場のmeeting_form 2段目レイヤーを"
+             "適用する。widehold再学習後は不要(会場ごとの構成をwidehold側が既に反映済み)"
+             "なので、通常は指定しないこと。",
+    )
+    parser.add_argument(
         "--skip-meeting-form-layer", action="store_true",
-        help="9会場のmeeting_form 2段目レイヤーを適用せず、従来通りの合成のみ行う(デバッグ用)。",
+        help="(後方互換のため残置、2026-07-31以降は何もしない。既定でスキップになった)",
     )
     args = parser.parse_args()
 
@@ -119,7 +133,7 @@ def main() -> None:
 
     combined = pd.concat(frames, ignore_index=True, sort=False)
 
-    if not args.skip_meeting_form_layer:
+    if args.apply_meeting_form_layer:
         if meeting_form_snapshot_path.exists():
             mf_venues = [normalize_venue_name(v) for v in MEETING_FORM_VENUES]
             mf_snap = pd.read_csv(meeting_form_snapshot_path, low_memory=False)

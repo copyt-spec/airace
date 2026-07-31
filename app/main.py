@@ -388,11 +388,16 @@ def _build_venue_summary_cards(df: pd.DataFrame) -> List[Dict[str, Any]]:
 
 
 CONF_TIER_ORDER = ["A", "B", "C", "D"]
+# 2026-07-31改定: 以前はtop_evを過去ログから再現できないという想定で
+# prob/prob_gapだけの近似tierだったため「近似」を付けていたが、
+# scripts/build_sim_light_csv.pyがapp/main.pyの_build_race_signalと
+# 完全に同じロジック(top_prob>=0.08ゲート+top_ev段階)で計算するように
+# なったため、もう近似ではない([[boat_ai_rank_confidence_roi_inversion]]参照)。
 CONF_TIER_LABEL = {
-    "A": "A(近似・勝負レース相当)",
-    "B": "B(近似・狙い目相当)",
-    "C": "C(近似・様子見相当)",
-    "D": "D(近似・見送り寄り相当)",
+    "A": "A(勝負レース)",
+    "B": "B(狙い目)",
+    "C": "C(様子見)",
+    "D": "D(見送り寄り)",
 }
 
 ODDS_BAND_ORDER = ["〜10倍", "10〜30倍", "30〜50倍", "50〜100倍", "100倍〜"]
@@ -484,6 +489,20 @@ def _load_kelly_bankroll_daily(start_date: str = "", end_date: str = "") -> Dict
     }
 
 
+# 2026-07-31追加: 買い目群の「確率合算×オッズ」の平均(avg_best_ev)をそのまま
+# 「想定回収率」として画面表示すると、値が実態より大きく盛られてしまう
+# ([[boat_ai_rank_confidence_roi_inversion]]で判明した確率の自信過剰バイアスが
+# そのままEV計算に伝播するため)。widehold全期間データ(6011レース)で検証した
+# ところ、avg_best_evの単純平均は191.1%だったが、実際の合算ROI(投資加重)は
+# 125.1%で、比率は0.6543だった。この係数を掛けることで表示上の数値を実態に
+# 近づける(相対順位=ランキングとしての有効性は掛け算しても変わらないので
+# 保たれる)。確率分布自体を較正しようとすると(prob^β再正規化を試したが)、
+# レース内で確率の合計が1という制約のせいで絶対水準のズレまでは解消できず、
+# むしろ選ばれた買い目(元々高確率側に偏る)のEVをさらに過大評価する方向に
+# 働くことが分かったため、この単純なスケール補正の方が実用的と判断した。
+EXPECTED_ROI_CORRECTION_FACTOR = 0.6543
+
+
 def _build_race_signal(
     probabilities: Dict[str, float],
     ev_result: Dict[str, float],
@@ -508,26 +527,51 @@ def _build_race_signal(
         + max(0.0, 7.0 - float(best_count)) * 0.18
     )
 
-    if top_prob >= 0.11 and prob_gap >= 0.020 and top_ev >= 0.85:
+    # 2026-07-31改定(2回目): 最初はtop_prob/prob_gapを条件から完全に外し、
+    # top_ev単体で判定していた(top_ev>=9.0等)。これはこれでROIと整合していた
+    # (A=196%>B=149%>C=119%>D=104%)が、ユーザーから「うまいと判断するのは
+    # 確率が高いことが前提で、その上でオッズが高い(=市場が織り込みきれて
+    # いない)ことを『うまい』と呼びたい」という明確な要望があり、確信度
+    # (top_prob)を再びゲート条件として組み込んだ形に作り直した。
+    #
+    # widehold全期間データ(6448レース)で確認: top_prob>=0.08を確信度ゲートに
+    # 固定した上でtop_evの各しきい値を試すと、ev>=p50(3.5前後)→ROI121%、
+    # ev>=p70(4.8前後)→131%、ev>=p80(5.8前後)→141%、ev>=p90(7.8前後)→155%と
+    # 単調に上がる、きれいな関係を確認。trusted venue(戸田/桐生/江戸川)個別でも
+    # top_prob>=0.08 & top_ev>=7.5の組み合わせで戸田176%・桐生207%・江戸川144%
+    # と全て強い結果。
+    #
+    # 注意: この設計は「確信度が低いのにオッズが良い(=市場の見落とし)」レース
+    # ([[boat_ai_rank_confidence_roi_inversion]]の低top_prob側の発見、
+    # ROI約147〜166%)をD(見送り)に含めてしまう。これは意図的な選択で、
+    # 「モデルが自信を持って当てられそうで、かつオッズが売れ切っていない」
+    # レースだけをA〜Cとして拾う設計。低確信度側の妙味は別シグナル
+    # (`_build_value_signal`、未接続)として切り分けてある。
+    if top_prob < 0.08:
+        rank = "D"
+        label = "見送り寄り"
+        tone = "bad"
+        comment = "モデルの確信度が低く、無理に触らない方が無難です。"
+    elif top_ev >= 7.5:
         rank = "A"
         label = "勝負レース"
         tone = "good"
-        comment = "上位の信頼度が高く、買い目も絞りやすいです。"
-    elif top_prob >= 0.08 and prob_gap >= 0.012 and top_ev >= 0.65:
+        comment = "確信度が高く、オッズもまだ売れ切っていない狙い目です。"
+    elif top_ev >= 5.5:
         rank = "B"
         label = "狙い目"
         tone = "good"
-        comment = "十分狙えるレースです。買い目バランスも悪くありません。"
-    elif top_prob >= 0.055 and top_ev >= 0.50:
+        comment = "確信度・期待値ともに十分で、狙う価値があるレースです。"
+    elif top_ev >= 3.5:
         rank = "C"
         label = "様子見"
         tone = "warn"
-        comment = "買えなくはないですが、過信はしにくいです。"
+        comment = "確信度はありますが、期待値は平均的な水準です。"
     else:
         rank = "D"
         label = "見送り寄り"
         tone = "bad"
-        comment = "確率差か期待値の押しが弱く、無理に触らない方が無難です。"
+        comment = "確信度はあってもオッズが売れており、旨みは薄めです。"
 
     return {
         "rank": rank,
@@ -540,7 +584,69 @@ def _build_race_signal(
         "prob_gap": round(prob_gap * 100.0, 2),
         "top_ev": round(top_ev, 2),
         "avg_best_ev": round(avg_best_ev, 2),
+        "expected_roi_pct": round(avg_best_ev * EXPECTED_ROI_CORRECTION_FACTOR * 100.0, 1),
         "best_count": best_count,
+    }
+
+
+def _build_value_signal(top_prob: float, top_ev: float) -> Dict[str, Any]:
+    """
+    2026-07-31追加(試作、未接続): [[boat_ai_rank_confidence_roi_inversion]]の発見を
+    コード化した「価値層(value tier)」判定。top_prob単体版から、より強い信号である
+    top_ev(=全120通り中の最大 prob*odds、_calc_ev基準)ベースに作り直した。
+
+    経緯: 最初はtop_prob(モデルの自信度)が低いレースほどROIが高いという逆転を
+    見つけたが(23会場中17会場、trusted venue3つとも確認)、その後
+    top_ev(=prob*odds、損益分岐は1.0)でパーセンタイル分割するとさらに強く
+    綺麗な単調関係になることが分かった(全体で上位10%榜: ROI約197%、
+    上位5%: ROI約229%、23会場中20会場・trusted venue3つとも同方向、
+    戸田+52.7pt/桐生+74.2pt/江戸川+116.1pt)。high top_ev群(上位10%)のうち
+    「高確信」(top_prob>=0.093)に該当するのはわずか23.6%で、corr(top_prob,
+    top_ev)=-0.198と弱い負の相関しか無い。つまり「自信度が高いのにオッズが
+    まだ売れ切っていない(EVが高い)レース」を狙う方が、単純に自信度だけを
+    見るより遥かに筋が良い。
+
+    重要な副次的発見: 現行の_build_race_signal のRANK A/B/C/D 判定に含まれる
+    top_ev>=0.85/0.65/0.50という条件は、実質的に機能していなかった(死んだ条件)。
+    _calc_ev(prob*odds)の実際の値は損益分岐1.0に対して中央値が約4もあり、
+    0.85という閾値はほぼ全レースが素通りしてしまう。widehold検証でも、この
+    EV条件の有無で対象レースが一切変わらなかった(全く同じレース集合になった)
+    ことで発覚した。
+
+    top_evの帯ごとのROI(widehold全期間、is_selected=1の買い目ベース、
+    n=6448レース):
+      - top_ev>=9.17 (上位10%): ROI約197%(n=645races)
+      - top_ev>=6.69 (上位20%): ROI約175%(n=1290races)
+      - top_ev>=5.52 (上位30%): ROI約155%(n=1935races)
+      - それ以外: ROI約110〜140%
+
+    重要: まだTelegram通知(scripts/rank_a_telegram_notify等)や既存の
+    _build_race_signal / RANK A/B/C/D表示には一切接続していない試作関数。
+    実運用に使う前に、別期間での再現性の確認をユーザーと合意してから接続すること。
+    """
+    if top_ev >= 6.5:
+        tier = "VALUE"
+        label = "妙味(EV高)"
+        tone = "good"
+        comment = "期待値(確率×オッズ)が高く、過去データではこの帯が最もROIが高い傾向です。"
+    elif top_ev >= 3.0:
+        tier = "NEUTRAL"
+        label = "中立"
+        tone = "warn"
+        comment = "期待値は平均的な水準です。"
+    else:
+        tier = "LOW_EV"
+        label = "期待値低め"
+        tone = "bad"
+        comment = "期待値が低く、過去データではROIが伸び悩む帯です。"
+
+    return {
+        "value_tier": tier,
+        "value_label": label,
+        "value_tone": tone,
+        "value_comment": comment,
+        "top_prob_raw": round(float(top_prob), 4),
+        "top_ev_raw": round(float(top_ev), 3),
     }
 
 

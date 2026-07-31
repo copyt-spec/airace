@@ -92,18 +92,23 @@ def _aggregate_stats_from_df(df: pd.DataFrame) -> Dict[str, Dict[str, Any]]:
 
 def _compute_race_confidence(full_df: pd.DataFrame) -> pd.DataFrame:
     """
-    レース単位の「信頼度tier」を、ログ済みの全買い目(is_selectedに関わらず)から
-    近似的に算出する。
+    レース単位の「信頼度tier」を、ログ済みの全買い目(is_selectedに関わらず、
+    120通り全て)から算出する。
 
-    本番の _build_race_signal (app/main.py) は top_prob / prob_gap / top_ev の
-    3指標を使うが、top_ev はその時点のEVロジックに依存し過去ログから厳密に
-    再現できないため、ここでは top_prob と prob_gap の2指標のみで近似する。
-    (=「近似tier」であり本番のA/B/C/D判定と完全一致はしない)
+    2026-07-31改定: 以前はtop_evが「過去ログから厳密に再現できない」という
+    想定でtop_prob/prob_gapの2指標だけの近似tierだったが、実際には
+    MERGED_LOG_PATHに120通り全てのprob/oddsが揃っており、
+    app/main.pyの_calc_ev(prob*odds)と全く同じ式でtop_ev(=そのレースの
+    120通り中の最大EV)を再現できることを確認した。そのためapp/main.pyの
+    _build_race_signalと完全に同じロジック(top_prob>=0.08をゲートにした上で
+    top_evで段階分け)で判定するように変更し、「近似tier」ではなくなった。
     """
     key = ["date", "venue", "race_no"]
-    work = full_df[key + ["rank_prob", "prob"]].copy()
+    work = full_df[key + ["rank_prob", "prob", "odds"]].copy()
     work["rank_prob"] = pd.to_numeric(work["rank_prob"], errors="coerce")
     work["prob"] = pd.to_numeric(work["prob"], errors="coerce").fillna(0.0)
+    work["odds"] = pd.to_numeric(work["odds"], errors="coerce").fillna(0.0)
+    work["ev"] = work["prob"] * work["odds"]
 
     top1 = (
         work[work["rank_prob"] == 1][key + ["prob"]]
@@ -115,18 +120,24 @@ def _compute_race_confidence(full_df: pd.DataFrame) -> pd.DataFrame:
         .rename(columns={"prob": "second_prob"})
         .drop_duplicates(subset=key)
     )
+    top_ev = work.groupby(key, as_index=False)["ev"].max().rename(columns={"ev": "top_ev"})
 
-    sig = top1.merge(top2, on=key, how="left")
+    sig = top1.merge(top2, on=key, how="left").merge(top_ev, on=key, how="left")
     sig["second_prob"] = sig["second_prob"].fillna(0.0)
     sig["prob_gap"] = sig["top1_prob"] - sig["second_prob"]
+    sig["top_ev"] = sig["top_ev"].fillna(0.0)
 
     def _tier(row) -> str:
-        p, gap = row["top1_prob"], row["prob_gap"]
-        if p >= 0.11 and gap >= 0.020:
+        # app/main.py の _build_race_signal と同一ロジック(2026-07-31版):
+        # 確信度(top_prob>=0.08)をゲートにし、その上でtop_evで段階分け。
+        p, ev = row["top1_prob"], row["top_ev"]
+        if p < 0.08:
+            return "D"
+        if ev >= 7.5:
             return "A"
-        if p >= 0.08 and gap >= 0.012:
+        if ev >= 5.5:
             return "B"
-        if p >= 0.055:
+        if ev >= 3.5:
             return "C"
         return "D"
 
@@ -197,7 +208,7 @@ def main() -> None:
         if excluded:
             print(f"excluded pending (no result yet) rows: {excluded}")
 
-    df = df.merge(race_signal[["date", "venue", "race_no", "top1_prob", "prob_gap", "conf_tier"]],
+    df = df.merge(race_signal[["date", "venue", "race_no", "top1_prob", "prob_gap", "top_ev", "conf_tier"]],
                   on=["date", "venue", "race_no"], how="left")
 
     df["venue_norm"] = df["venue"].map(_normalize_venue_name)
@@ -205,7 +216,7 @@ def main() -> None:
     for col in ["is_selected", "is_hit"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0).astype(int)
 
-    for col in ["bet_cost_yen", "return_yen", "profit_yen", "prob", "odds", "top1_prob", "prob_gap"]:
+    for col in ["bet_cost_yen", "return_yen", "profit_yen", "prob", "odds", "top1_prob", "prob_gap", "top_ev"]:
         df[col] = pd.to_numeric(df[col], errors="coerce").fillna(0.0)
 
     df["odds_band"] = df["odds"].map(_bucket_odds)
@@ -237,6 +248,7 @@ def main() -> None:
         "odds_band",
         "top1_prob",
         "prob_gap",
+        "top_ev",
         "conf_tier",
         "is_selected",
         "is_hit",

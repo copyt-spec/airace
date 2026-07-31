@@ -54,6 +54,31 @@ VENUE_DEPTH_OVERRIDES: Dict[str, int] = {
     "丸亀": 6, "びわこ": 6, "江戸川": 6, "桐生": 6, "児島": 6, "大村": 6,
     "尼崎": 6, "下関": 6, "平和島": 6, "戸田": 6, "津": 6, "常滑": 6, "住之江": 6,
 }
+
+# 2026-07-30追加(バグ修正): --all実行時、_train_one_venueの関数デフォルト
+# (include_form_features/include_meeting_form_features等が全部True)を
+# 会場を区別せず一律適用すると、選択導入していたはずの特徴量構成が壊れる事故が
+# 実際に起きた(コミット053f456で、ROI未検証の15会場に今節成績特徴量が意図せず
+# 展開され、桐生のrecent_form/motorも誤ってFalse→Trueになっていた。
+# コミット053f456^時点のmeta.jsonで正しい状態を確認済み)。
+# 「どの会場に何を導入したか」を関数デフォルトやCLI引数任せにせず、ここに
+# コードとして明示し、--all実行時は既定でここから読む(--uniform_featuresで
+# 従来通りの一律適用に戻せる、比較実験用)。
+MEETING_FORM_VENUES = {
+    "戸田", "江戸川", "丸亀", "びわこ", "若松", "下関", "芦屋", "鳴門", "浜名湖",
+}
+FORM_FEATURE_DISABLED_VENUES = {"桐生"}
+
+
+def _default_feature_flags_for_venue(venue: str) -> Dict[str, bool]:
+    venue = normalize_venue_name(venue)
+    return {
+        "include_form_features": venue not in FORM_FEATURE_DISABLED_VENUES,
+        "include_development_features": True,
+        "include_meeting_form_features": venue in MEETING_FORM_VENUES,
+        "include_wind_course_interaction_features": False,
+        "include_st_std_feature": False,
+    }
 RACER_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "racer_point_in_time_stats.csv"
 # 2026-07-21追加: 選手の直近の調子(recent5_*)とモーターの直近の調子
 # (motor_recent8_*)。scripts/analyze_racer_recent_form.py /
@@ -907,6 +932,14 @@ def main() -> None:
              "従来通り--depthの値(デフォルト8)を使う。指定しない場合は全会場に"
              "--depthを一律適用する(従来通りの後方互換動作)。",
     )
+    parser.add_argument(
+        "--uniform_features", action="store_true",
+        help="--all実行時、会場ごとの正しい特徴量構成(MEETING_FORM_VENUES/"
+             "FORM_FEATURE_DISABLED_VENUES)を無視し、--disable_*/--enable_*の"
+             "値を全会場に一律適用する(従来の挙動。2026-07-30に053f456で"
+             "全会場へのmeeting_form意図せぬ展開を招いた設定なので、通常は"
+             "指定しないこと。新機能を全会場で一律に試したい実験時のみ使う)。",
+    )
     args = parser.parse_args()
 
     feature_weight_targets = [s.strip() for s in args.feature_weight_targets.split(",") if s.strip()]
@@ -936,6 +969,18 @@ def main() -> None:
                 if venue_depth != args.depth:
                     print(f"[{normalize_venue_name(v)}] --use_tuned_depth によりdepth={venue_depth}を使用(通常は{args.depth})")
 
+            if args.all and not args.uniform_features:
+                feature_flags = _default_feature_flags_for_venue(v)
+                print(f"[{normalize_venue_name(v)}] 会場ごとの正しい特徴量構成を適用: {feature_flags}")
+            else:
+                feature_flags = {
+                    "include_form_features": not args.disable_form_features,
+                    "include_development_features": not args.disable_development_features,
+                    "include_meeting_form_features": not args.disable_meeting_form_features,
+                    "include_wind_course_interaction_features": args.enable_wind_course_interaction_features,
+                    "include_st_std_feature": args.enable_st_std_feature,
+                }
+
             _train_one_venue(
                 src=src, venue=v, racer_stats=racer_stats,
                 test_size=args.test_size, random_state=args.random_state,
@@ -946,11 +991,7 @@ def main() -> None:
                 feature_weight_multiplier=args.feature_weight_multiplier,
                 motor_stats=motor_stats,
                 model_suffix=args.model_suffix,
-                include_form_features=not args.disable_form_features,
-                include_development_features=not args.disable_development_features,
-                include_meeting_form_features=not args.disable_meeting_form_features,
-                include_wind_course_interaction_features=args.enable_wind_course_interaction_features,
-                include_st_std_feature=args.enable_st_std_feature,
+                **feature_flags,
             )
         except Exception as e:
             print(f"[ERROR] venue={v}: {e}")
