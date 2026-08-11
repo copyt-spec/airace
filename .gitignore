@@ -163,3 +163,6 @@ data/models/*
 .pytest_cache/
 .mypy_cache/
 .cache/
+# 2026-08-10追加: engine/tide_fetcher.pyが気象庁の潮位テキストを年単位で
+# キャッシュする場所。再取得可能なデータなのでgit管理不要。
+data/tide_cache/

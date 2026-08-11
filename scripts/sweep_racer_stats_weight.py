@@ -47,9 +47,12 @@ from engine import buy_selector  # noqa: E402
 from engine.venue_registry import normalize_venue_name  # noqa: E402
 from scripts.train_binary_catboost_per_venue_with_racer_stats import (  # noqa: E402
     DATASET_PATH,
+    VENUE_DEPTH_OVERRIDES,
     _load_dataset_for_venue,
     _load_racer_stats,
+    _load_motor_stats,
     _add_racer_stats_block,
+    _default_feature_flags_for_venue,
     _split_by_date,
     _train_one_venue,
 )
@@ -156,7 +159,12 @@ def main() -> None:
     parser.add_argument("--test_size", type=float, default=0.20)
     parser.add_argument("--random_state", type=int, default=42)
     parser.add_argument("--iterations", type=int, default=600)
-    parser.add_argument("--depth", type=int, default=8)
+    parser.add_argument(
+        "--depth", type=int, default=None,
+        help="未指定の場合、VENUE_DEPTH_OVERRIDES(本番でdepth=6にチューニング済みの"
+             "13会場)に従って自動選択する。それ以外の会場はdepth=8。"
+             "明示的に指定した場合はその値を全倍率に一律適用する。",
+    )
     parser.add_argument("--learning_rate", type=float, default=0.05)
     args = parser.parse_args()
 
@@ -164,13 +172,23 @@ def main() -> None:
     targets = [s.strip() for s in args.targets.split(",") if s.strip()]
     multipliers: List[float] = [float(s.strip()) for s in args.multipliers.split(",") if s.strip()]
 
-    print(f"venue={venue} targets={targets} multipliers={multipliers}")
+    # 2026-08-03バグ修正: 以前はここでdepth=8固定・motor_statsを渡さず・
+    # 特徴量構成(include_form_features等)も全会場一律Trueで再学習していたため、
+    # depth=6にチューニング済みの会場や、桐生のようにform/motor/meeting_form特徴量を
+    # 意図的に無効化している会場で、multiplier=1.0(既存本番モデル)との比較条件が
+    # ズレていた(depthやモーター特徴量の有無が結果に混ざり込み、重みの効果だけを
+    # 切り分けられなかった)。本番と同じ_default_feature_flags_for_venue()・
+    # VENUE_DEPTH_OVERRIDES・実際のmotor_statsを使うよう修正。
+    depth = args.depth if args.depth is not None else VENUE_DEPTH_OVERRIDES.get(venue, 8)
+    feature_flags = _default_feature_flags_for_venue(venue)
+    print(f"venue={venue} targets={targets} multipliers={multipliers} depth={depth} feature_flags={feature_flags}")
 
     print("\n真のholdout日付を復元中(学習時のsplitと同一ロジック)...")
     valid_dates = _compute_valid_dates(venue, args.test_size)
     print(f"valid dates: {len(valid_dates)}日分 ({min(valid_dates)}..{max(valid_dates)})")
 
     racer_stats = _load_racer_stats()
+    motor_stats = _load_motor_stats()
 
     summary_rows = []
 
@@ -191,11 +209,13 @@ def main() -> None:
             _train_one_venue(
                 src=DATASET_PATH, venue=venue, racer_stats=racer_stats,
                 test_size=args.test_size, random_state=args.random_state,
-                iterations=args.iterations, depth=args.depth,
+                iterations=args.iterations, depth=depth,
                 learning_rate=args.learning_rate, verbose_eval=0,
                 skip_baseline_rerun=True,
                 feature_weight_targets=targets,
                 feature_weight_multiplier=m,
+                motor_stats=motor_stats,
+                **feature_flags,
             )
 
         print(f"\n=== 予測生成(真のholdoutのみ): multiplier={m} ===")

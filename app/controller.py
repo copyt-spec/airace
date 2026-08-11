@@ -13,6 +13,8 @@ from engine.odds_fetcher import fetch_odds
 from engine.beforeinfo_fetcher_venue import fetch_beforeinfo_venue
 from engine.racelist_enricher import enrich_entries_with_racelist
 from engine.buy_selector import select_best_bets, should_skip_race
+from engine.prob_calibrator import calibrate_prob_map
+from engine.lane_calibrator import apply_lane_correction
 from engine.kelly_allocator import kelly_size_selected_bets
 from engine.formation_builder import build_formation_options
 from engine.model_loader_catboost_binary import BinaryCatBoostVenueModel
@@ -22,6 +24,8 @@ from engine.venue_registry import (
     get_jcd,
     normalize_venue_name,
 )
+from engine.venue_race_schedule import approx_post_time_str
+from engine.tide_fetcher import get_tide_features
 
 
 class RaceController:
@@ -440,6 +444,29 @@ class RaceController:
             ),
         }
 
+    def _extract_tide_set(self, venue_name: str, date: str, race_no: int) -> Dict[str, Any]:
+        """会場・日付・レース番号から潮位特徴量(tide_level_cm・tide_trend_cmph)を返す。
+        2026-08-10追加。engine/venue_race_schedule.pyの概算発走時刻(過去レースに
+        実際の発走時刻データが無いため、boatrace.jp公式サイトからサンプル取得した
+        近似値。[[boat_ai_tide_data_research]]参照)と、engine/tide_fetcher.pyの
+        気象庁公式潮位データを組み合わせる。観測点未確定の会場や取得失敗時は
+        0.0/0.0を返し(_add_feature_block側でも同じfillnaが入るので二重の安全策)、
+        推論全体を落とさない。
+        """
+        try:
+            venue_name = normalize_venue_name(venue_name)
+            t = approx_post_time_str(venue_name, race_no)
+            if t is None:
+                return {"tide_level_cm": 0.0, "tide_trend_cmph": 0.0}
+            hh, mm = t.split(":")
+            level, trend = get_tide_features(venue_name, date, int(hh), int(mm))
+            return {
+                "tide_level_cm": level if level is not None else 0.0,
+                "tide_trend_cmph": trend if trend is not None else 0.0,
+            }
+        except Exception:
+            return {"tide_level_cm": 0.0, "tide_trend_cmph": 0.0}
+
     # =========================
     # AI input build
     # =========================
@@ -503,9 +530,12 @@ class RaceController:
         date: str,
         race_no: int,
         weather_set: Dict[str, Any],
+        tide_set: Dict[str, Any] | None = None,
     ) -> List[Dict[str, Any]]:
         if not self._is_valid_6boats(ai_entries):
             return []
+
+        tide_set = tide_set or {"tide_level_cm": 0.0, "tide_trend_cmph": 0.0}
 
         lane_map = {int(x["lane"]): x for x in ai_entries}
         rows: List[Dict[str, Any]] = []
@@ -535,6 +565,8 @@ class RaceController:
                         "weather": str(weather_set.get("weather", "") or ""),
                         "wind_dir": str(weather_set.get("wind_dir", "") or ""),
                         "wind_speed_mps": self._safe_float(weather_set.get("wind_speed_mps", 0.0), 0.0),
+                        "tide_level_cm": self._safe_float(tide_set.get("tide_level_cm", 0.0), 0.0),
+                        "tide_trend_cmph": self._safe_float(tide_set.get("tide_trend_cmph", 0.0), 0.0),
                     }
 
                     for lane in range(1, 7):
@@ -554,6 +586,7 @@ class RaceController:
         self,
         prob_map: Dict[str, float],
         odds_map: Dict[str, float] | None = None,
+        prob_map_raw: Dict[str, float] | None = None,
     ) -> List[Dict[str, Any]]:
         rows: List[Dict[str, Any]] = []
 
@@ -562,10 +595,15 @@ class RaceController:
             if odds_map:
                 odds = self._safe_float(odds_map.get(combo, 0.0), 0.0)
 
+            prob_raw = float(prob)
+            if prob_map_raw is not None:
+                prob_raw = self._safe_float(prob_map_raw.get(combo, prob), float(prob))
+
             rows.append({
                 "combo": str(combo),
                 "score": float(prob),
                 "prob": float(prob),
+                "prob_raw": prob_raw,
                 "odds": float(odds),
                 "ev": float(prob) * float(odds) if odds > 0 else 0.0,
             })
@@ -587,7 +625,19 @@ class RaceController:
         2026-07-23追加: この情報をUI側(見送ろ！表示)に伝えるため、単純な
         リストからタプルに変更した。
         """
-        ai_preds = self._prob_map_to_rows(prob_map, odds_map=odds_map)
+        # 2026-08-06追加: モデル確率の較正(engine.prob_calibrator)。
+        # 「どの組み合わせを買うか」の判定(buy_selector)にのみ較正確率を使い、
+        # RANK/EV/的中信頼度など他の箇所は較正前の生確率のまま維持するため、
+        # ここでprob_map(較正後)とprob_map_raw(較正前)の両方をai_predsに積む。
+        prob_map_calibrated = calibrate_prob_map(prob_map, venue=venue_name)
+        # 2026-08-11追加: isotonic較正(値ベース、レーン非依存)の後に、
+        # レーン(枠番)固有の較正バイアス補正を重ねる([[boat_ai_lane_waku_overweight_finding]])。
+        # この順序(isotonic較正→レーン補正)でROI検証済み(engine/lane_calibrator.py参照)。
+        prob_map_calibrated = apply_lane_correction(prob_map_calibrated, venue=venue_name)
+
+        ai_preds = self._prob_map_to_rows(
+            prob_map_calibrated, odds_map=odds_map, prob_map_raw=prob_map
+        )
 
         best_bets = select_best_bets(
             ai_preds,
@@ -639,6 +689,11 @@ class RaceController:
             "formation_options": [],
             "model_mode": self._resolve_model_mode(model_mode or self.model_mode),
             "is_skip_decision": False,
+            "tide_advantage": {
+                "tide_trend_cmph": 0.0, "tide_level_cm": 0.0,
+                "lane1_delta_pt": 0.0, "favored_side": None,
+            },
+            "weather_set": {"weather": "", "wind_dir": "", "wind_speed_mps": 0.0, "wave_cm": 0.0},
         }
 
         if not self._is_valid_6boats(base_entries):
@@ -653,6 +708,7 @@ class RaceController:
             return out
 
         weather_set = self._extract_weather_set(beforeinfo)
+        tide_set = self._extract_tide_set(venue_name, date, race_no)
 
         df120_rows = self._build_df120_from_ai_entries(
             ai_entries=ai_entries,
@@ -660,6 +716,7 @@ class RaceController:
             date=date,
             race_no=race_no,
             weather_set=weather_set,
+            tide_set=tide_set,
         )
         if not df120_rows or len(df120_rows) != 120:
             return out
@@ -689,6 +746,45 @@ class RaceController:
 
         if not prob_map:
             return out
+
+        # 2026-08-11追加: 「今の潮位条件で1号艇(イン)が有利か不利か」を、
+        # 会場ごとの学習済みモデル自身に聞く形で算出する(HTML表示用)。
+        # 会場によって潮の効き方が逆になることもあるため、人間が「上潮なら
+        # インが有利」のような固定ルールを決め打ちしない、という
+        # [[boat_ai_tide_wind_nonlinear_feature_impl]]の設計方針を踏襲している。
+        # tide_level_cm/tide_trend_cmphを0にした「中立条件」で同じモデルに
+        # 再推論させ、実際の潮位条件との1号艇勝率の差分を見る。
+        # 潮位特徴量を使っていない会場のモデルでは、feature_colsにtide列が
+        # 含まれないため2回の推論結果は完全に一致し、差分は自動的に0になる
+        # (=表示側で会場ごとのホワイトリストを別途持つ必要がない)。
+        tide_advantage: Dict[str, Any] = {
+            "tide_trend_cmph": self._safe_float(tide_set.get("tide_trend_cmph", 0.0), 0.0),
+            "tide_level_cm": self._safe_float(tide_set.get("tide_level_cm", 0.0), 0.0),
+            "lane1_delta_pt": 0.0,
+            "favored_side": None,
+        }
+        try:
+            df120_neutral = df120.copy()
+            df120_neutral["tide_level_cm"] = 0.0
+            df120_neutral["tide_trend_cmph"] = 0.0
+            prob_map_neutral = model.predict_proba(df120_neutral, venue_name)
+
+            def _lane1_win_prob(pmap: Dict[str, float]) -> float:
+                return sum(p for combo, p in pmap.items() if combo.split("-")[0] == "1")
+
+            lane1_now = _lane1_win_prob(prob_map)
+            lane1_neutral = _lane1_win_prob(prob_map_neutral)
+            delta_pt = (lane1_now - lane1_neutral) * 100.0
+            tide_advantage["lane1_delta_pt"] = round(delta_pt, 2)
+            # ノイズ域(±0.05pt未満)は「有利/不利」を断定せず、数値だけ見せる。
+            if delta_pt > 0.05:
+                tide_advantage["favored_side"] = "in"
+            elif delta_pt < -0.05:
+                tide_advantage["favored_side"] = "out"
+        except Exception:
+            pass
+        out["tide_advantage"] = tide_advantage
+        out["weather_set"] = weather_set
 
         best_bets, is_skip_decision = self._select_best_bets(
             prob_map=prob_map,
@@ -755,6 +851,11 @@ class RaceController:
             "df120_rows": [],
             "formation_options": [],
             "model_mode": self._resolve_model_mode(model_mode or self.model_mode),
+            "tide_advantage": {
+                "tide_trend_cmph": 0.0, "tide_level_cm": 0.0,
+                "lane1_delta_pt": 0.0, "favored_side": None,
+            },
+            "weather_set": {"weather": "", "wind_dir": "", "wind_speed_mps": 0.0, "wave_cm": 0.0},
         }
 
         # 出走表+選手成績(同じページを参照するので内部で直列)/ 直前情報 / オッズ は

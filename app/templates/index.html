@@ -792,6 +792,10 @@
               <div class="signalRank">Rank {{ race_signal.get("rank", "-") }}</div>
               <div class="signalLabel">{{ race_signal.get("label", "") }}</div>
               <div class="signalComment">{{ race_signal.get("comment", "") }}</div>
+              <div class="signalComment">
+                的中信頼度: {{ race_signal.get("hit_confidence_label", "") }}
+                ({{ "%.1f"|format(race_signal.get("hit_confidence_score", race_signal.get("combined_prob", 0.0))) }}%)
+              </div>
 
               <div class="signalMetrics">
                 <div class="signalMini">
@@ -814,7 +818,66 @@
                   <div class="k">想定回収率</div>
                   <div class="v">{{ "%.1f"|format(race_signal.get("expected_roi_pct", 0.0)) }}%</div>
                 </div>
+                <div class="signalMini">
+                  <div class="k">的中信頼度</div>
+                  <div class="v">{{ "%.1f"|format(race_signal.get("hit_confidence_score", race_signal.get("combined_prob", 0.0))) }}%</div>
+                </div>
               </div>
+            </div>
+          </div>
+        </div>
+        {% endif %}
+
+        {% if mode == "full" and (weather_set is defined and weather_set) %}
+        <div class="card">
+          <div class="hd">
+            <div class="ttl">只今の潮・風</div>
+            <div class="tiny muted">Tide / Wind</div>
+          </div>
+          <div class="bd">
+            <div class="signalMetrics">
+              <div class="signalMini">
+                <div class="k">潮位</div>
+                {% set trend = tide_advantage.get("tide_trend_cmph", 0.0) %}
+                <div class="v">
+                  {% if trend > 0.5 %}上潮
+                  {% elif trend < -0.5 %}下潮
+                  {% else %}潮止まり
+                  {% endif %}
+                  ({{ "%+.1f"|format(trend) }}cm/h)
+                </div>
+              </div>
+              <div class="signalMini">
+                <div class="k">潮位レベル</div>
+                <div class="v">{{ "%.0f"|format(tide_advantage.get("tide_level_cm", 0.0)) }}cm</div>
+              </div>
+              <div class="signalMini">
+                <div class="k">風</div>
+                <div class="v">{{ weather_set.get("wind_dir", "") or "-" }} {{ "%.1f"|format(weather_set.get("wind_speed_mps", 0.0)) }}m/s</div>
+              </div>
+              <div class="signalMini">
+                <div class="k">波高</div>
+                <div class="v">{{ "%.0f"|format(weather_set.get("wave_cm", 0.0)) }}cm</div>
+              </div>
+              <div class="signalMini">
+                <div class="k">天候</div>
+                <div class="v">{{ weather_set.get("weather", "") or "-" }}</div>
+              </div>
+              <div class="signalMini">
+                <div class="k">潮位の効き方(このモデル判定)</div>
+                {% set side = tide_advantage.get("favored_side") %}
+                <div class="v">
+                  {% if side == "in" %}イン有利 (1号艇 {{ "%+.2f"|format(tide_advantage.get("lane1_delta_pt", 0.0)) }}pt)
+                  {% elif side == "out" %}アウト有利 (1号艇 {{ "%+.2f"|format(tide_advantage.get("lane1_delta_pt", 0.0)) }}pt)
+                  {% else %}この会場は潮位モデル未対応/影響ほぼなし
+                  {% endif %}
+                </div>
+              </div>
+            </div>
+            <div class="tiny muted" style="margin-top:6px;">
+              「潮位の効き方」は会場ごとの学習済みモデルに、今の潮位条件と中立条件(潮位ゼロ)を
+              それぞれ推論させた差から算出しています(会場ごとに潮の効き方が異なるため、固定ルールでは判定していません)。
+              風は現状、コース別の効き方をモデルに組み込んでいないため実測値のみの表示です。
             </div>
           </div>
         </div>

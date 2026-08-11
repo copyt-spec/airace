@@ -8,15 +8,17 @@
   "with_meeting_form_features": true,
   "with_wind_course_interaction_features": false,
   "with_st_std_feature": false,
+  "with_tide_features": true,
+  "with_wind_nonlinear_features": true,
   "model_suffix": "",
   "feature_weight_targets": null,
   "feature_weight_multiplier": 1.0,
   "dataset_path": "/Users/takedanaoya/boat_ai/boat_ai/data/datasets/trifecta_train.csv",
-  "rows_total": 953640,
-  "rows_train": 760800,
-  "rows_valid": 192840,
-  "positive_total": 7947,
-  "negative_total": 945693,
+  "rows_total": 962280,
+  "rows_train": 767880,
+  "rows_valid": 194400,
+  "positive_total": 8019,
+  "negative_total": 954261,
   "feature_cols": [
     "combo_first_lane",
     "combo_second_lane",
@@ -244,7 +246,20 @@
     "third_meeting_so_far_top3_rate",
     "third_meeting_so_far_win_rate",
     "third_meeting_so_far_avg_st",
-    "third_meeting_so_far_n"
+    "third_meeting_so_far_n",
+    "wind_speed_mps_sq",
+    "wave_cm_sq",
+    "tide_level_cm",
+    "tide_trend_cmph",
+    "lane1_course_tide_interaction",
+    "lane2_course_tide_interaction",
+    "lane3_course_tide_interaction",
+    "lane4_course_tide_interaction",
+    "lane5_course_tide_interaction",
+    "lane6_course_tide_interaction",
+    "first_course_tide_interaction",
+    "second_course_tide_interaction",
+    "third_course_tide_interaction"
   ],
   "params": {
     "iterations": 600,
@@ -255,8 +270,8 @@
     "scale_pos_weight": 119.0
   },
   "metrics": {
-    "valid_logloss": 0.3934820833198695,
-    "valid_auc": 0.8645101131952361
+    "valid_logloss": 0.38597550344631587,
+    "valid_auc": 0.868647457153872
   },
   "baseline_rerun_metrics_same_split": null
 }

@@ -54,6 +54,8 @@ if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
 from engine import buy_selector  # noqa: E402
+from engine.prob_calibrator import calibrate_prob_map  # noqa: E402
+from engine.lane_calibrator import apply_lane_correction  # noqa: E402
 from engine.venue_registry import VENUE_ORDER, normalize_venue_name  # noqa: E402
 
 LOG_DIR = PROJECT_ROOT / "data" / "logs"
@@ -95,8 +97,23 @@ def _build_race_rows(date: str, venue: str, race_no: int, race_df: pd.DataFrame,
 
     ranked = race_df.sort_values("prob", ascending=False).reset_index(drop=True)
 
+    # 2026-08-06追加: 較正確率(engine.prob_calibrator)をbuy_selectorの選定に
+    # 使う(app/controller.pyの_select_best_betsと同じ較正+prob_raw方式)。
+    # 較正曲線が無い場合はcalibrate_prob_mapがそのまま生確率を返すため、
+    # 較正導入前と同じ挙動にフォールバックする(fail-safe)。
+    raw_prob_map = {str(r["combo"]): float(r["prob"]) for _, r in ranked.iterrows()}
+    cal_prob_map = calibrate_prob_map(raw_prob_map, venue=venue)
+    # 2026-08-11追加: isotonic較正の後にレーン別補正を重ねる
+    # ([[boat_ai_lane_waku_overweight_finding]]、engine/lane_calibrator.py参照)。
+    cal_prob_map = apply_lane_correction(cal_prob_map, venue=venue)
+
     ai_preds = [
-        {"combo": r["combo"], "prob": float(r["prob"]), "odds": float(r["odds"])}
+        {
+            "combo": r["combo"],
+            "prob": float(cal_prob_map.get(str(r["combo"]), r["prob"])),
+            "prob_raw": float(r["prob"]),
+            "odds": float(r["odds"]),
+        }
         for _, r in ranked.iterrows()
     ]
     try:

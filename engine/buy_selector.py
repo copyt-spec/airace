@@ -274,8 +274,17 @@ def _resolve_config(
     key = _config_key(venue)
     cfg = dict(BASE_VENUE_BUY_CONFIG.get(key, BASE_VENUE_BUY_CONFIG["default"]))
 
+    # 2026-08-06修正: 従来はext(venue_buy_config.optimized.json)の参照キーが
+    # BASE_VENUE_BUY_CONFIGにハードコードされた4会場(丸亀/児島/戸田/住之江)+
+    # "default"のみに限定されていたため、それ以外の18会場(桐生・江戸川等)の
+    # override設定を書いても一切反映されない(常に"default"キーだけを見に行く)
+    # というバグがあった。会場名そのもの(正規化後)でのoverrideを優先的に
+    # 探すよう修正し、全会場で個別チューニング値が効くようにする。
     ext = _load_external_config()
-    if key in ext:
+    normalized_venue = _normalize_venue_name(venue or "")
+    if normalized_venue in ext:
+        cfg.update(ext[normalized_venue])
+    elif key in ext:
         cfg.update(ext[key])
 
     if min_prob is not None:
@@ -344,7 +353,13 @@ def _calc_distribution_entropy(probs: List[float]) -> float:
 
 
 def _calc_dynamic_points(rows: List[Dict[str, Any]], venue: str, cfg: Dict[str, float]) -> int:
-    probs = sorted([_safe_float(r.get("prob", 0.0), 0.0) for r in rows], reverse=True)
+    # entropy tier や top1/top3_sum等のしきい値は元々「較正前(生)の確率スケール」で
+    # 検証・チューニングされているため、点数決定はできる限り生確率(prob_raw)を使う。
+    # prob_rawが無いai_preds(従来通りの呼び出し)は今まで通りprobを使うので後方互換。
+    probs = sorted(
+        [_safe_float(r.get("prob_raw", r.get("prob", 0.0)), 0.0) for r in rows],
+        reverse=True,
+    )
     if not probs:
         return 3
 
@@ -429,9 +444,11 @@ def should_skip_race(
     if thr <= 0:
         return False
 
+    # SKIP_TOP1_PROB_THRESHOLDSは生確率(較正前)スケールで検証済みの値なので、
+    # prob_rawがあればそちらを優先する(_calc_dynamic_pointsのentropy計算と同じ理由)。
     top1_prob = 0.0
     for row in ai_preds:
-        p = _safe_float(row.get("prob", row.get("score", 0.0)), 0.0)
+        p = _safe_float(row.get("prob_raw", row.get("prob", row.get("score", 0.0))), 0.0)
         if p > top1_prob:
             top1_prob = p
 

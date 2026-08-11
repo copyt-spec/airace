@@ -429,9 +429,9 @@ th{
   </section>
 
   <section class="table-card" style="margin-bottom:22px;">
-    <h3 class="table-title">信頼度別(近似tier)の内訳</h3>
+    <h3 class="table-title">RANK別(D/C/B/A/A+)の内訳</h3>
     <div class="meta" style="margin-top:0;margin-bottom:10px;">
-      レース内の最高確率(top1)と2位との差(prob_gap)から近似的にA〜Dへ分類したものです。本番の判定(top_ev込み)とは完全一致しません。
+      買い目全体の期待値(portfolio_ev、確率×オッズの平均、オッズは50倍でキャップ)からA+〜Dへ分類したものです。儲け重視の指標で、本番(app/main.py)と完全に同じロジックです。
     </div>
     <div class="table-wrap">
       <table>
@@ -449,6 +449,45 @@ th{
         </thead>
         <tbody>
           {% for b in conf_tier_breakdown %}
+          <tr>
+            <td>{{ b.label }}</td>
+            <td>{{ b.buy_count }}</td>
+            <td>{{ b.hit_count }}</td>
+            <td>{{ "%.2f"|format(b.hit_rate * 100) }}%</td>
+            <td>{{ "{:,.0f}".format(b.total_bets) }}</td>
+            <td>{{ "{:,.0f}".format(b.total_return) }}</td>
+            <td class="{% if b.total_profit >= 0 %}positive{% else %}negative{% endif %}">
+              {{ "{:,.0f}".format(b.total_profit) }}
+            </td>
+            <td>{{ "%.3f"|format(b.roi) }}</td>
+          </tr>
+          {% endfor %}
+        </tbody>
+      </table>
+    </div>
+  </section>
+
+  <section class="table-card" style="margin-bottom:22px;">
+    <h3 class="table-title">的中信頼度別(D/C/B/A/A+)の内訳</h3>
+    <div class="meta" style="margin-top:0;margin-bottom:10px;">
+選ばれた買い目群の確率合算(combined_prob)に、買い目の傾向(本命寄りか穴狙いか)を補正する項を加えたスコアからA+〜Dへ分類したものです。RANK(儲け重視)とは別軸で、「当たりやすさ」を素直に表します。的中率はA+が最も高くなりますが、ROIはむしろD側の方が高くなる傾向がある点に注意してください。
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>tier</th>
+            <th>買い目数</th>
+            <th>的中数</th>
+            <th>的中率</th>
+            <th>総投資</th>
+            <th>総回収</th>
+            <th>総損益</th>
+            <th>ROI</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for b in hit_confidence_breakdown %}
           <tr>
             <td>{{ b.label }}</td>
             <td>{{ b.buy_count }}</td>

@@ -192,7 +192,17 @@ def fetch_beforeinfo_venue(race_no: int, date: str, venue_code: int) -> Dict[str
     # 気象
     # ==========================
     # 天候
-    weather_block = soup.select_one(".weather1_bodyUnit")
+    # 2026-08-10修正: セレクタが".weather1_bodyUnit"のみ(絞り込みなし)だった
+    # ため、DOM内で最初にマッチする".weather1_bodyUnit.is-direction"(気温欄、
+    # 例:"気温31.0℃")を誤って拾っていた。天候(晴/曇/雨)は".is-weather"クラスの
+    # 別ブロックで、風速・波高・風向きは2026-07-16に修正済みだったが天候だけ
+    # このバグが残っていた。実際のBOATRACE公式ページ(直前情報)で
+    # ".weather1_bodyUnit.is-weather"が正しく"晴"等を返すことをClaude in Chromeで
+    # 確認済み。このバグにより、weather_code(engine/model_loader_catboost_binary.py
+    # のweather_map: 晴/晴れ/曇/曇り/雨/雪)がライブ推論では常に0(該当なし)に
+    # フォールバックしていた(学習データ側は別途修正済みで正しく埋まっている、
+    # 詳細はboat_ai_weather_feature_bugメモリ参照。今回のバグはライブ推論限定)。
+    weather_block = soup.select_one(".weather1_bodyUnit.is-weather")
     if weather_block:
         data["weather"] = weather_block.get_text(strip=True)
 
@@ -221,17 +231,24 @@ def fetch_beforeinfo_venue(race_no: int, date: str, venue_code: int) -> Dict[str
         if icon:
             classes = icon.get("class", [])
             for c in classes:
+                # 2026-08-11修正: 旧マップは45度刻み(8方位、is-wind1〜8)だったが、
+                # 実際のBOATRACE公式サイトは22.5度刻みの16方位(is-wind1〜16、
+                # is-wind17はデータ未確定時の空アイコン)で配信していた。
+                # Claude in Chromeで実際のレースページの矢印アイコン(is-wind1〜17)を
+                # 並べて目視確認して判明した(is-wind13の矢印が左向き=西だったのに
+                # 旧マップでは"7"→"西"だったため、7と13という別々の値が両方
+                # "西"相当という矛盾から発覚)。この結果、is-wind2,4,6,8,10,12,14,16
+                # (16方位の中間方角)は常に"不明"になり、さらにis-wind3,5,7,...,15も
+                # 旧8方位の意味とズレていたため、"1"(北)以外は表示されていた風向が
+                # 実際とは異なっていた可能性が高い(風向テキストはモデルにもUIにも
+                # 使われていなかったため、予想結果への影響はない)。
                 if c.startswith("is-wind"):
                     num = c.replace("is-wind", "")
                     wind_map = {
-                        "1": "北",
-                        "2": "北東",
-                        "3": "東",
-                        "4": "南東",
-                        "5": "南",
-                        "6": "南西",
-                        "7": "西",
-                        "8": "北西",
+                        "1": "北", "2": "北北東", "3": "北東", "4": "東北東",
+                        "5": "東", "6": "東南東", "7": "南東", "8": "南南東",
+                        "9": "南", "10": "南南西", "11": "南西", "12": "西南西",
+                        "13": "西", "14": "西北西", "15": "北西", "16": "北北西",
                     }
                     wind_dir_val = wind_map.get(num, "不明")
                     data["wind_direction"] = wind_dir_val

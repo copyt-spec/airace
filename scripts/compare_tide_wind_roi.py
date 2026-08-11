@@ -1,20 +1,18 @@
 from __future__ import annotations
 
 """
-scripts/generate_predictions_with_racer_stats_model.py --model_suffix "_windcourse" / "_windcourse_off"
-で会場について生成した predictions_with_racer_stats_{venue}_windcourse(.off).csv を読み込み、
+scripts/generate_predictions_with_racer_stats_model.py --model_suffix "_tidewind" / "_tidewind_off"
+で会場について生成した predictions_with_racer_stats_{venue}_tidewind(.off).csv を読み込み、
 今のbuy_selector.select_best_bets ロジックで backtest_buy_selector.py と同じ計算をして、
-コース×風速/波高 交互作用特徴量あり/なしのROIを公正に比較する。
-
-2026-08-11追加: 元々は丸亀専用だった(丸亀ではROI-3.63ptで不採用済み、
-[[boat_ai_marugame_wind_course_feature]]参照)が、[[boat_ai_tide_wind_all_venue_roi_and_robustness]]
-と同じ方法論で全会場再検証するため --venue で任意会場を指定できるよう汎用化した。
+潮位特徴量(tide_level_cm/tide_trend_cmph/course_tide_interaction)+風速非線形項
+(wind_speed_mps_sq/wave_cm_sq)あり/なしのROIを公正に比較する。
 
 両方とも generate_predictions...py 側で「学習に使っていない日付(holdout)」だけに
 自動で絞り込み済みなので、ここでの比較はリーク無し。
 
 使い方:
-  python scripts/compare_windcourse_roi.py --venue 丸亀
+  python scripts/compare_tide_wind_roi.py --venue 児島
+  python scripts/compare_tide_wind_roi.py --venue 下関 --with_suffix _tidewind_seed2 --without_suffix _tidewind_off_seed2
 """
 
 import argparse
@@ -63,21 +61,21 @@ def load_variant(venue: str, suffix: str) -> pd.DataFrame:
 
 def main() -> None:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--venue", required=True, help="会場名(例: 丸亀)")
+    parser.add_argument("--venue", required=True, help="会場名(例: 児島)")
     parser.add_argument(
-        "--with_suffix", default="_windcourse",
-        help="あり側のmodel_suffix(例: 別random_stateで頑健性確認する場合は_windcourse_seed2など)",
+        "--with_suffix", default="_tidewind",
+        help="あり側のmodel_suffix(例: 別random_stateで頑健性確認する場合は_tidewind_seed2など)",
     )
     parser.add_argument(
-        "--without_suffix", default="_windcourse_off",
+        "--without_suffix", default="_tidewind_off",
         help="なし側(baseline)のmodel_suffix",
     )
     args = parser.parse_args()
     venue = args.venue
 
     variants = [
-        (args.with_suffix, "コース×風速/波高あり(with wind_course_interaction)"),
-        (args.without_suffix, "コース×風速/波高なし(baseline, without wind_course_interaction)"),
+        (args.with_suffix, "潮位+風速非線形あり(with tide/wind_nonlinear)"),
+        (args.without_suffix, "潮位+風速非線形なし(baseline)"),
     ]
 
     summaries = {}

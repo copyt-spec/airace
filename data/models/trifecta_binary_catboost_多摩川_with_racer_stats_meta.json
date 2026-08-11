@@ -6,17 +6,19 @@
   "with_motor_stats": true,
   "with_development_features": true,
   "with_meeting_form_features": false,
-  "with_wind_course_interaction_features": false,
+  "with_wind_course_interaction_features": true,
   "with_st_std_feature": false,
+  "with_tide_features": false,
+  "with_wind_nonlinear_features": false,
   "model_suffix": "",
   "feature_weight_targets": null,
   "feature_weight_multiplier": 1.0,
   "dataset_path": "/Users/takedanaoya/boat_ai/boat_ai/data/datasets/trifecta_train.csv",
-  "rows_total": 908880,
-  "rows_train": 726000,
-  "rows_valid": 182880,
-  "positive_total": 7574,
-  "negative_total": 901306,
+  "rows_total": 921720,
+  "rows_train": 736080,
+  "rows_valid": 185640,
+  "positive_total": 7681,
+  "negative_total": 914039,
   "feature_cols": [
     "combo_first_lane",
     "combo_second_lane",
@@ -208,7 +210,25 @@
     "third_recent5_races_prior",
     "third_recent5_place_rate_prior",
     "third_motor_recent8_races_prior",
-    "third_motor_recent8_place_rate_prior"
+    "third_motor_recent8_place_rate_prior",
+    "lane1_course_wind_interaction",
+    "lane1_course_wave_interaction",
+    "lane2_course_wind_interaction",
+    "lane2_course_wave_interaction",
+    "lane3_course_wind_interaction",
+    "lane3_course_wave_interaction",
+    "lane4_course_wind_interaction",
+    "lane4_course_wave_interaction",
+    "lane5_course_wind_interaction",
+    "lane5_course_wave_interaction",
+    "lane6_course_wind_interaction",
+    "lane6_course_wave_interaction",
+    "first_course_wind_interaction",
+    "first_course_wave_interaction",
+    "second_course_wind_interaction",
+    "second_course_wave_interaction",
+    "third_course_wind_interaction",
+    "third_course_wave_interaction"
   ],
   "params": {
     "iterations": 600,
@@ -219,8 +239,8 @@
     "scale_pos_weight": 119.0
   },
   "metrics": {
-    "valid_logloss": 0.3989214780908278,
-    "valid_auc": 0.8594795229973279
+    "valid_logloss": 0.4070740398981639,
+    "valid_auc": 0.8613125196961818
   },
   "baseline_rerun_metrics_same_split": null
 }

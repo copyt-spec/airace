@@ -49,20 +49,25 @@ SNAPSHOT_CSV = LOG_DIR / "predictions_new_model_snapshot.csv"
 LIVE_PREDICTIONS_CSV = LOG_DIR / "predictions.csv"
 OUT_CSV = LOG_DIR / "predictions_combined_for_sim.csv"
 
-# 2026-07-31追加(重要): 2026-07-30にdepth=6+特徴量構成修正版モデルへの
-# widehold全期間再学習を行い、/simを新モデル基準に作り直した([[boat_ai_sim_widehold_rebuild]]、
-# scripts/build_widehold_snapshot_models.py参照)。この新モデルはまだRenderにpush
-# していないため、predictions.csv(実ログ)は当面古いモデルのままログされ続ける。
-# この状態でCUTOFF_DATEを過去日のままにしておくと、scripts/update_results_daily.py
-# の日次自動実行(cronでこのスクリプトを引数無しで呼ぶ)のたびに古いモデルの
-# 実ログがsimに混入してしまう(実際に2026-07-31の自動実行で発生し、
-# predictions_combined_for_sim.csvが汚染される事故があった)。
-# そのため、実際にRenderへpushして本番が新モデルに切り替わるまでは、
-# CUTOFF_DATEを未来の安全な日付に固定し、常にwidehold静的スナップショットだけを
-# 使うようにする。**Renderへpushしたら、この値を実際のpush(デプロイ)日に
-# 更新すること。** 更新を忘れると、新モデルが本番稼働しているのにsimがいつまでも
-# 静的スナップショットのままになってしまう。
-CUTOFF_DATE = "20261231"
+# 2026-08-01更新: 新モデル(depth=6+特徴量構成修正版)は2026-07-31 21:56に
+# Renderへ実際にデプロイ済み(ユーザー確認済み)。それ以前のCUTOFF_DATE=20261231
+# (未来固定)は「Renderにpushするまでの安全策」だったが、デプロイが完了した
+# ため役目を終えた。
+#
+# ただし単純に「デプロイ日=20260731」とはしていない: 7/30・7/31はどちらも
+# レースの大半がデプロイ時刻(7/31 21:56、その日の最終レース終了後)より前に
+# 終わっており、predictions.csv(実ログ)のこの2日分はほぼ全て旧モデルの
+# 予測のまま。ここでCUTOFF_DATEを20260731にすると、旧モデルの実ログが
+# 「新モデルの実績」として混入してしまう(過去に一度実際に発生した事故と
+# 同種)。そのため、新モデルの実ログが完全にクリーンな最初の日である
+# 20260801を採用する。
+#
+# 空いた7/30・7/31分は、静的スナップショット側を
+# scripts/generate_gap_predictions.py + scripts/build_new_model_predictions_snapshot.py
+# --pred-suffix _gapfill で「現行本番モデル×その日の実オッズ」により事後生成し、
+# predictions_new_model_snapshot.csv に追加結合することで埋めている
+# ([[boat_ai_sim_snapshot_gap_20260730_31]]参照)。
+CUTOFF_DATE = "20260801"
 
 # 2026-07-26追加、2026-07-31にデフォルト無効化: 「今節成績」特徴量は全会場一律
 # ではなく9会場だけ選択導入していた(scripts/build_meeting_form_predictions_snapshot.py)。

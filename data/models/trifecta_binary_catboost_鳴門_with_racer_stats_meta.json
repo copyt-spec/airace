@@ -8,15 +8,17 @@
   "with_meeting_form_features": true,
   "with_wind_course_interaction_features": false,
   "with_st_std_feature": false,
+  "with_tide_features": false,
+  "with_wind_nonlinear_features": false,
   "model_suffix": "",
   "feature_weight_targets": null,
   "feature_weight_multiplier": 1.0,
   "dataset_path": "/Users/takedanaoya/boat_ai/boat_ai/data/datasets/trifecta_train.csv",
-  "rows_total": 853560,
-  "rows_train": 684000,
-  "rows_valid": 169560,
-  "positive_total": 7113,
-  "negative_total": 846447,
+  "rows_total": 862080,
+  "rows_train": 690480,
+  "rows_valid": 171600,
+  "positive_total": 7184,
+  "negative_total": 854896,
   "feature_cols": [
     "combo_first_lane",
     "combo_second_lane",
@@ -255,8 +257,8 @@
     "scale_pos_weight": 119.0
   },
   "metrics": {
-    "valid_logloss": 0.44839876472537843,
-    "valid_auc": 0.8394349371893702
+    "valid_logloss": 0.44388387764866477,
+    "valid_auc": 0.8423094388129353
   },
   "baseline_rerun_metrics_same_split": null
 }

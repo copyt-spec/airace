@@ -20,6 +20,7 @@ except Exception as e:
 
 from engine.prediction_logger import build_prediction_rows, save_prediction_rows, save_lane_racer_no, save_lane_tilt
 from engine.race_scenario import build_race_scenario
+from engine.hit_confidence_model import score as _hit_confidence_score, tier_thresholds as _hit_confidence_tier_thresholds
 from engine.venue_registry import (
     VENUE_MASTER,
     VENUE_ORDER,
@@ -387,13 +388,13 @@ def _build_venue_summary_cards(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return rows
 
 
-CONF_TIER_ORDER = ["A", "B", "C", "D"]
-# 2026-07-31改定: 以前はtop_evを過去ログから再現できないという想定で
-# prob/prob_gapだけの近似tierだったため「近似」を付けていたが、
+CONF_TIER_ORDER = ["A+", "A", "B", "C", "D"]
+# 2026-08-03改定: portfolio_ev(avg_best_ev)方式への切り替えに合わせてA+を追加。
 # scripts/build_sim_light_csv.pyがapp/main.pyの_build_race_signalと
-# 完全に同じロジック(top_prob>=0.08ゲート+top_ev段階)で計算するように
-# なったため、もう近似ではない([[boat_ai_rank_confidence_roi_inversion]]参照)。
+# 完全に同じロジック(avg_best_evの5段階閾値)で計算するように
+# なっているため、近似ではない([[boat_ai_rank_confidence_roi_inversion]]参照)。
 CONF_TIER_LABEL = {
+    "A+": "A+(本命勝負)",
     "A": "A(勝負レース)",
     "B": "B(狙い目)",
     "C": "C(様子見)",
@@ -439,6 +440,11 @@ def _breakdown_by_key(df: pd.DataFrame, key: str, order: List[str], label_map: D
 
 def _build_conf_tier_breakdown(df: pd.DataFrame) -> List[Dict[str, Any]]:
     return _breakdown_by_key(df, "conf_tier", CONF_TIER_ORDER, CONF_TIER_LABEL)
+
+
+def _build_hit_confidence_breakdown(df: pd.DataFrame) -> List[Dict[str, Any]]:
+    # HIT_CONFIDENCE_TIER_*は_build_race_signal付近で定義(参照は実行時解決なので問題ない)。
+    return _breakdown_by_key(df, "hit_confidence_tier", HIT_CONFIDENCE_TIER_ORDER, HIT_CONFIDENCE_TIER_BREAKDOWN_LABEL)
 
 
 def _build_odds_band_breakdown(df: pd.DataFrame) -> List[Dict[str, Any]]:
@@ -500,7 +506,94 @@ def _load_kelly_bankroll_daily(start_date: str = "", end_date: str = "") -> Dict
 # レース内で確率の合計が1という制約のせいで絶対水準のズレまでは解消できず、
 # むしろ選ばれた買い目(元々高確率側に偏る)のEVをさらに過大評価する方向に
 # 働くことが分かったため、この単純なスケール補正の方が実用的と判断した。
-EXPECTED_ROI_CORRECTION_FACTOR = 0.6543
+#
+# 2026-08-05改定: 下のODDS_CAP_FOR_RANK_EV導入(オッズキャップ)に合わせて
+# 係数を再算出。キャップ後は極端な万馬券によるEVの過大評価そのものが
+# 減るため、必要な補正が弱くなり0.6543→0.7621になった(cap後の単純平均
+# avg_best_ev 1.648 に対し実際の投資加重ROIが1.256、比率0.7621)。
+EXPECTED_ROI_CORRECTION_FACTOR = 0.7621
+
+# 2026-08-05追加: RANK判定・想定回収率のEV計算で使うオッズの上限。
+# ユーザー指摘「ランクの付け方がEVに寄りすぎていて、EVはオッズ側に寄りすぎている
+# (全然当たらないところに過度に期待している)」を受けて検証したところ、
+# tierごとのprobはほぼ同じ(5.8〜6.0%)でoddsだけがD26倍→A+138倍と単調に
+# 増えており、A+の買い目の43.5%がodds>=100倍というのが実態だった。odds>=100倍
+# 帯の的中はたった1569件中23件で、その払戻上位3件だけで区間全体の24%を占める
+# など、A+の高ROIが少数のジャックポット的中に強く依存していた。
+# オッズを50倍でキャップしてEVを計算し直すと、A+内のodds>=100倍比率が
+# 43.5%→2.5%まで下がり、tierごとのROIも(見た目は下がるが)より頑健な
+# 数字になることをwidehold全期間データ(cutoff前224日)で確認した。
+ODDS_CAP_FOR_RANK_EV = 50.0
+
+
+def _capped_avg_best_ev(best_bets: List[Dict[str, Any]]) -> float:
+    if not best_bets:
+        return 0.0
+    total = 0.0
+    for x in best_bets:
+        # 2026-08-06追加: best_betsのprobはbuy_selectorの選定用に較正済み
+        # (engine.prob_calibrator)の場合があるため、RANKのEV計算は較正前の
+        # 生確率(prob_raw)を使う。RANK閾値は生確率スケールで検証済みのため。
+        prob = _safe_float(x.get("prob_raw", x.get("prob", 0.0)), 0.0)
+        odds = _safe_float(x.get("odds", 0.0), 0.0)
+        if prob > 0.0 and odds > 0.0:
+            total += prob * min(odds, ODDS_CAP_FOR_RANK_EV)
+        else:
+            # prob/oddsが取れない古いbest_bets形式向けのフォールバック
+            # (ev_raw/evは非キャップ値なので、無いよりはマシという扱い)
+            total += _safe_float(x.get("ev_raw", x.get("ev", 0.0)), 0.0)
+    return total / len(best_bets)
+
+
+# 2026-08-05追加: RANK(儲け重視、オッズキャップ済みportfolio_ev)とは別に、
+# 「これは当たりそうか」を素直に表す指標が欲しいというユーザー要望を受けて追加。
+# combined_prob(=選ばれた買い目群の確率の合算値。的中率の予測値そのもの)で
+# 分位点を切ったところ、的中率はD10.6%→A+28.0%ときれいに単調増加する一方、
+# ROIはD130.5%→A+113.1%とむしろ右肩下がり(いつものfavorite-longshot bias)
+# だった(widehold全期間データ、cutoff前224日で検証)。つまりRANKとこの指標は
+# 意図的に別方向を向いており、両立させず両方表示することにした
+# (RANK=儲けの狙い目、的中信頼度=当たりやすさの目安)。
+HIT_CONFIDENCE_TIER_ORDER = ["A+", "A", "B", "C", "D"]
+HIT_CONFIDENCE_TIER_LABEL = {
+    "A+": "非常に高い",
+    "A": "高い",
+    "B": "やや高い",
+    "C": "普通",
+    "D": "低め",
+}
+HIT_CONFIDENCE_TIER_BREAKDOWN_LABEL = {
+    "A+": "A+(非常に高い)",
+    "A": "A(高い)",
+    "B": "B(やや高い)",
+    "C": "C(普通)",
+    "D": "D(低め)",
+}
+
+
+def _combined_prob_from_best_bets(best_bets: List[Dict[str, Any]]) -> float:
+    # _capped_avg_best_evと同じ理由でprob_rawを優先(的中信頼度の閾値も
+    # 生確率スケールで検証済みのため)。
+    return sum(_safe_float(x.get("prob_raw", x.get("prob", 0.0)), 0.0) for x in best_bets)
+
+
+def _hit_confidence_tier(hit_confidence_score_value: float) -> str:
+    # 2026-08-08(2回目改定): combined_prob(選ばれた買い目群のprob_raw合算)
+    # 単体よりも、avg_ev_capped(favorite-longshot bias補正項)を併用した
+    # engine.hit_confidence_model のロジスティック回帰スコアの方が
+    # out-of-sample AUC/Brierで有意に精度が高いと検証できたため、tier判定を
+    # このスコア基準に切り替えた(詳細はengine/hit_confidence_model.pyの
+    # docstring、メモリboat_ai_hit_confidence_score_model参照)。
+    # 閾値はそのモデルのtier_thresholds(全期間データの分位点)を使う。
+    thresholds = _hit_confidence_tier_thresholds()
+    if hit_confidence_score_value >= thresholds.get("A+", 0.325):
+        return "A+"
+    if hit_confidence_score_value >= thresholds.get("A", 0.284):
+        return "A"
+    if hit_confidence_score_value >= thresholds.get("B", 0.238):
+        return "B"
+    if hit_confidence_score_value >= thresholds.get("C", 0.182):
+        return "C"
+    return "D"
 
 
 def _build_race_signal(
@@ -516,9 +609,14 @@ def _build_race_signal(
     top_ev = max([_safe_float(v, 0.0) for v in ev_result.values()], default=0.0)
 
     best_count = len(best_bets)
-    avg_best_ev = 0.0
-    if best_bets:
-        avg_best_ev = sum(_safe_float(x.get("ev_raw", x.get("ev", 0.0)), 0.0) for x in best_bets) / len(best_bets)
+    avg_best_ev = _capped_avg_best_ev(best_bets)
+    combined_prob = _combined_prob_from_best_bets(best_bets)
+    # 2026-08-08: combined_prob単体よりavg_best_ev(=avg_ev_capped)を
+    # 併用したengine.hit_confidence_modelのスコアの方が精度が高いと検証済み
+    # (Brier/AUC改善)。的中信頼度の主表示値・tier判定はこちらに切り替えた。
+    hit_confidence_score = _hit_confidence_score(combined_prob, avg_best_ev)
+    hit_confidence_tier = _hit_confidence_tier(hit_confidence_score)
+    hit_confidence_label = HIT_CONFIDENCE_TIER_LABEL[hit_confidence_tier]
 
     score = (
         top_prob * 100.0 * 0.42
@@ -527,51 +625,57 @@ def _build_race_signal(
         + max(0.0, 7.0 - float(best_count)) * 0.18
     )
 
-    # 2026-07-31改定(2回目): 最初はtop_prob/prob_gapを条件から完全に外し、
-    # top_ev単体で判定していた(top_ev>=9.0等)。これはこれでROIと整合していた
-    # (A=196%>B=149%>C=119%>D=104%)が、ユーザーから「うまいと判断するのは
-    # 確率が高いことが前提で、その上でオッズが高い(=市場が織り込みきれて
-    # いない)ことを『うまい』と呼びたい」という明確な要望があり、確信度
-    # (top_prob)を再びゲート条件として組み込んだ形に作り直した。
+    # 2026-08-03改定(3回目、portfolio_ev方式): ユーザーから「top確率(=1点だけの
+    # 確率)は重要ではなく、実際は複数点に賭けるのだから買い目全体の期待値で
+    # 判断すべき」という指摘があり検証した結果、avg_best_ev(=選ばれた買い目群の
+    # 確率×オッズの平均、ここでは"portfolio_ev"と呼ぶ)の方がtop_ev単体判定より
+    # 優れていることを確認したため、判定方式を全面的に置き換えた。
     #
-    # widehold全期間データ(6448レース)で確認: top_prob>=0.08を確信度ゲートに
-    # 固定した上でtop_evの各しきい値を試すと、ev>=p50(3.5前後)→ROI121%、
-    # ev>=p70(4.8前後)→131%、ev>=p80(5.8前後)→141%、ev>=p90(7.8前後)→155%と
-    # 単調に上がる、きれいな関係を確認。trusted venue(戸田/桐生/江戸川)個別でも
-    # top_prob>=0.08 & top_ev>=7.5の組み合わせで戸田176%・桐生207%・江戸川144%
-    # と全て強い結果。
+    # 2026-08-05改定(4回目、オッズキャップ): その後「A+の的中率が低すぎる」との
+    # 指摘を受けて調べたところ、tierごとのprobはほぼ同じ(5.8〜6.0%)でoddsだけが
+    # D26倍→A+138倍と単調に増えており、A+の43.5%がodds>=100倍という「万馬券頼み」
+    # の設計になっていたことが判明した(ODDS_CAP_FOR_RANK_EVのコメント参照)。
+    # avg_best_ev計算時にoddsを50倍でキャップ(_capped_avg_best_ev)するよう変更し、
+    # 閾値もキャップ後の分位点に更新した。widehold全期間データ(cutoff前224日)の
+    # cap=50での分位点:
+    #   D  (< 1.425, 下位40%): 的中18.3% ROI 118.6%
+    #   C  (1.425〜1.785, 30%): 的中15.8% ROI 115.0%
+    #   B  (1.785〜2.324, 20%): 的中15.1% ROI 141.1%
+    #   A  (2.324〜3.079, 7%) : 的中15.6% ROI 166.2%
+    #   A+ (>= 3.079, 3%)     : 的中11.1% ROI 168.1%
+    # A+のROIの見た目は下がった(旧cap無し364.7%→168.1%)が、A+買い目中の
+    # odds>=100倍比率が43.5%→2.5%に下がり、的中1件あたりの払戻集中度も
+    # 37.9%→26.6%に緩和されるなど、少数のジャックポット的中への依存が
+    # 大きく減った、より頑健な数字になっている。
     #
-    # 注意: この設計は「確信度が低いのにオッズが良い(=市場の見落とし)」レース
-    # ([[boat_ai_rank_confidence_roi_inversion]]の低top_prob側の発見、
-    # ROI約147〜166%)をD(見送り)に含めてしまう。これは意図的な選択で、
-    # 「モデルが自信を持って当てられそうで、かつオッズが売れ切っていない」
-    # レースだけをA〜Cとして拾う設計。低確信度側の妙味は別シグナル
-    # (`_build_value_signal`、未接続)として切り分けてある。
-    if top_prob < 0.08:
-        rank = "D"
-        label = "見送り寄り"
-        tone = "bad"
-        comment = "モデルの確信度が低く、無理に触らない方が無難です。"
-    elif top_ev >= 7.5:
+    # 確信度ゲート(旧: top_prob>=0.08)は撤廃したまま。[[boat_ai_rank_confidence_roi_inversion]]
+    # で判明した「低確信度でもオッズが良ければROIが高い」レースを不当にD行きに
+    # していたのが一因で、portfolio_ev一本の判定の方が実績と整合的だったため。
+    if avg_best_ev >= 3.079:
+        rank = "A+"
+        label = "本命勝負"
+        tone = "good"
+        comment = "買い目全体の期待値が非常に高く、過去データで最もROIが高い水準です。"
+    elif avg_best_ev >= 2.324:
         rank = "A"
         label = "勝負レース"
         tone = "good"
-        comment = "確信度が高く、オッズもまだ売れ切っていない狙い目です。"
-    elif top_ev >= 5.5:
+        comment = "買い目全体の期待値が高く、狙い目のレースです。"
+    elif avg_best_ev >= 1.785:
         rank = "B"
         label = "狙い目"
         tone = "good"
-        comment = "確信度・期待値ともに十分で、狙う価値があるレースです。"
-    elif top_ev >= 3.5:
+        comment = "買い目全体の期待値は十分で、狙う価値があるレースです。"
+    elif avg_best_ev >= 1.425:
         rank = "C"
         label = "様子見"
         tone = "warn"
-        comment = "確信度はありますが、期待値は平均的な水準です。"
+        comment = "買い目全体の期待値は平均的な水準です。"
     else:
         rank = "D"
         label = "見送り寄り"
         tone = "bad"
-        comment = "確信度はあってもオッズが売れており、旨みは薄めです。"
+        comment = "買い目全体の期待値が低く、無理に触らない方が無難です。"
 
     return {
         "rank": rank,
@@ -586,6 +690,10 @@ def _build_race_signal(
         "avg_best_ev": round(avg_best_ev, 2),
         "expected_roi_pct": round(avg_best_ev * EXPECTED_ROI_CORRECTION_FACTOR * 100.0, 1),
         "best_count": best_count,
+        "combined_prob": round(combined_prob * 100.0, 2),
+        "hit_confidence_score": round(hit_confidence_score * 100.0, 2),
+        "hit_confidence_tier": hit_confidence_tier,
+        "hit_confidence_label": hit_confidence_label,
     }
 
 
@@ -782,6 +890,11 @@ def _render_venue_page(venue_name: str):
         formation_options: List[Dict[str, Any]] = []
         is_skip_decision = False
         resolved_model_mode = model_mode
+        tide_advantage: Dict[str, Any] = {
+            "tide_trend_cmph": 0.0, "tide_level_cm": 0.0,
+            "lane1_delta_pt": 0.0, "favored_side": None,
+        }
+        weather_set: Dict[str, Any] = {"weather": "", "wind_dir": "", "wind_speed_mps": 0.0, "wave_cm": 0.0}
 
         if mode == "full":
             grouped_odds = controller.get_odds_only(venue_name, race_no=race_no, date=date)
@@ -810,6 +923,8 @@ def _render_venue_page(venue_name: str):
             best_bets = bundle.get("best_bets", []) or []
             formation_options = bundle.get("formation_options", []) or []
             is_skip_decision = bool(bundle.get("is_skip_decision", False))
+            tide_advantage = bundle.get("tide_advantage", tide_advantage) or tide_advantage
+            weather_set = bundle.get("weather_set", weather_set) or weather_set
 
             race_signal = _build_race_signal(
                 probabilities=probabilities,
@@ -849,6 +964,8 @@ def _render_venue_page(venue_name: str):
             beforeinfo=beforeinfo,
             before_info=beforeinfo,
             beforeinfo_data=beforeinfo,
+            tide_advantage=tide_advantage,
+            weather_set=weather_set,
             mode=mode,
             all_venues=VENUE_ORDER,
             venue_config=VENUE_MASTER,
@@ -1064,6 +1181,7 @@ def sim_stats():
     venue_daily = _build_venue_daily_timeseries(filtered)
     summary_cards = _build_venue_summary_cards(filtered)
     conf_tier_breakdown = _build_conf_tier_breakdown(filtered)
+    hit_confidence_breakdown = _build_hit_confidence_breakdown(filtered)
     odds_band_breakdown = _build_odds_band_breakdown(filtered)
     kelly_bankroll = _load_kelly_bankroll_daily(start_date, end_date)
     model_comparison = _load_model_comparison()
@@ -1076,6 +1194,7 @@ def sim_stats():
         sim_daily_all=daily_all,
         sim_daily_by_venue=venue_daily,
         conf_tier_breakdown=conf_tier_breakdown,
+        hit_confidence_breakdown=hit_confidence_breakdown,
         odds_band_breakdown=odds_band_breakdown,
         kelly_bankroll=kelly_bankroll,
         model_comparison=model_comparison,

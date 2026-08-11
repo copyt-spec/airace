@@ -69,6 +69,39 @@ MEETING_FORM_VENUES = {
 }
 FORM_FEATURE_DISABLED_VENUES = {"桐生"}
 
+# 2026-08-10追加: [[boat_ai_tide_wind_nonlinear_feature_impl]]の潮位特徴量
+# (tide_level_cm/tide_trend_cmph/lane{n}_course_tide_interaction)+風速非線形項
+# (wind_speed_mps_sq/wave_cm_sq)を、scripts/compare_tide_wind_roi.pyで真のholdout
+# ROI検証した結果(全18会場、data/logs/tidewind_results.log参照)、会場によって
+# 効果が真逆に割れた(11勝7敗)。「向きが逆に学習された」バグの可能性を
+# scripts/inspect_tide_wind_feature_importance.pyで確認したが否定(重要度と
+# ROI正負に相関なし)。さらに下関(+35.64pt)・多摩川(-30.87pt)で--random_state
+# 違いの頑健性チェックを行い、両方とも同じ方向でむしろ拡大したため
+# (下関+55.14pt、多摩川-71.84pt)、単なる学習ノイズではなく会場ごとに安定した
+# 効果と判断。ROI差分がプラスだった11会場だけ選択導入する
+# (VENUE_DEPTH_OVERRIDESと同じパターン、ユーザー了承のうえ2026-08-10決定)。
+TIDE_WIND_VENUES = {
+    "津", "下関", "若松", "三国", "宮島", "蒲郡", "児島", "平和島", "福岡", "江戸川", "浜名湖",
+}
+
+# 2026-08-11追加: 丸亀だけで検証済みだったcourse×風速/波高交互作用特徴量
+# (include_wind_course_interaction_features)を、scripts/run_windcourse_all_venue_check.py
+# で全24会場(唐津はholdout不足でスキップ)再検証した(data/logs/windcourse_all_venue.log)。
+# 会場ごとの本番特徴量構成(depth/meeting_form/tide_wind)は揃えた上でこの特徴量だけon/off。
+# 結果は12勝11敗、振れ幅も潮位/風速より極端(+41.9pt〜-61.2pt)。OLS(course×wind_speed
+# interactionでロジスティック回帰、pure numpyのIRLSでサンドボックス内実施)では8会場中
+# 6会場で有意な正の係数(=実データに本物の関係あり、逆方向学習ではない)だったが、
+# ROI差分との相関は弱い(r=0.25、最も有意だった三国がROI最悪、最も非有意だった福岡が
+# ROI最良という逆転あり)ため、「本物の関係=ROI改善」という単純な話ではない。
+# 決め手として蒲郡(+41.86pt)と三国(-61.19pt)でrandom_state=7の頑健性チェックを行い、
+# 両方とも同じ方向で再現(蒲郡+7.60pt、三国-51.36pt。蒲郡は幅が大きく縮小したが符号は
+# 維持)したため、単なる学習ノイズではなく会場ごとに安定した効果と判断。ROI差分が
+# プラスだった12会場だけ選択導入する(TIDE_WIND_VENUESと同じパターン、
+# ユーザー了承のうえ2026-08-11決定)。
+WIND_COURSE_VENUES = {
+    "蒲郡", "福岡", "常滑", "多摩川", "尼崎", "下関", "戸田", "大村", "びわこ", "津", "平和島", "芦屋",
+}
+
 
 def _default_feature_flags_for_venue(venue: str) -> Dict[str, bool]:
     venue = normalize_venue_name(venue)
@@ -76,8 +109,14 @@ def _default_feature_flags_for_venue(venue: str) -> Dict[str, bool]:
         "include_form_features": venue not in FORM_FEATURE_DISABLED_VENUES,
         "include_development_features": True,
         "include_meeting_form_features": venue in MEETING_FORM_VENUES,
-        "include_wind_course_interaction_features": False,
+        # 2026-08-11: ROIホールドアウト検証(全24会場)でプラスだった12会場のみ
+        # デフォルト有効。詳細はWIND_COURSE_VENUESのコメント参照。
+        "include_wind_course_interaction_features": venue in WIND_COURSE_VENUES,
         "include_st_std_feature": False,
+        # 2026-08-10: ROIホールドアウト検証(全18会場)でプラスだった11会場のみ
+        # デフォルト有効。詳細はTIDE_WIND_VENUESのコメント参照。
+        "include_tide_features": venue in TIDE_WIND_VENUES,
+        "include_wind_nonlinear_features": venue in TIDE_WIND_VENUES,
     }
 RACER_STATS_PATH = PROJECT_ROOT / "data" / "datasets" / "racer_point_in_time_stats.csv"
 # 2026-07-21追加: 選手の直近の調子(recent5_*)とモーターの直近の調子
@@ -313,6 +352,52 @@ def _add_feature_block(df: pd.DataFrame) -> pd.DataFrame:
             out.loc[mask, f"{pos}_course_wind_interaction"] = out.loc[mask, f"lane{lane}_course_wind_interaction"]
             out.loc[mask, f"{pos}_course_wave_interaction"] = out.loc[mask, f"lane{lane}_course_wave_interaction"]
 
+    # 2026-08-10追加: 風速・波高の非線形(2乗)項。ユーザーの指摘
+    # (「極端な風はレース結果への影響が大きいので、直線的でなく指数的に効かせる
+    # 必要がある」)を受けて追加。CatBoost自体は決定木なので分割によって非線形な
+    # 関係を捉えられるが、明示的な2乗項を渡しておくと「極端値ほど効く」という
+    # 凸関数的な関係を少ない分割数でも学習しやすくなる(course_wind_interactionと
+    # 同じ考え方)。会場によらず常に計算しておき、実際に使うかはmeta.jsonの
+    # feature_cols(include_wind_nonlinear_features)に委ねる。まだROIホールド
+    # アウト検証前のため本番投入していない。
+    out["wind_speed_mps_sq"] = (out["wind_speed_mps"].astype("float32") ** 2).astype("float32")
+    out["wave_cm_sq"] = (out["wave_cm"].astype("float32") ** 2).astype("float32")
+
+    # 2026-08-10追加: 潮位特徴量(tide_level_cm・tide_trend_cmph)。
+    # scripts/join_tide_features.py で(venue, date, race_no)キーに事前結合済みの
+    # 生の列を前提とする(気象庁公式の推算潮位データ、[[boat_ai_tide_data_research]]
+    # 参照)。列が無いデータセット(未結合)でも動くよう、無ければ0埋めのダミー列を
+    # 用意する。
+    #
+    # 「潮の効き方(上げ潮でイン有利、等)は会場ごとに違う」というユーザーの指摘は、
+    # 個別に会場ごとの向きを決め打ちでテーブル化するのではなく、コース×潮位トレンドの
+    # 交互作用を生の特徴量として渡し、会場ごとに独立して学習される本モデル構造
+    # (venue単位でモデルを分けている)自体に判断させることで反映する
+    # (wind_courseと同じ設計。根拠のない会場別ルールを外部知識で捏造しない、
+    # という[[boat_ai_weather_feature_bug]]で確立した方針を踏襲)。
+    if "tide_level_cm" not in out.columns:
+        out["tide_level_cm"] = 0.0
+    if "tide_trend_cmph" not in out.columns:
+        out["tide_trend_cmph"] = 0.0
+    out["tide_level_cm"] = pd.to_numeric(out["tide_level_cm"], errors="coerce").fillna(0).astype("float32")
+    out["tide_trend_cmph"] = pd.to_numeric(out["tide_trend_cmph"], errors="coerce").fillna(0).astype("float32")
+
+    for lane in range(1, 7):
+        course_col = f"lane{lane}_course"
+        out[f"lane{lane}_course_tide_interaction"] = (
+            out[course_col].astype("float32") * out["tide_trend_cmph"]
+        ).astype("float32")
+
+    for pos, pos_name in [
+        ("first", "combo_first_lane"),
+        ("second", "combo_second_lane"),
+        ("third", "combo_third_lane"),
+    ]:
+        out[f"{pos}_course_tide_interaction"] = 0.0
+        for lane in range(1, 7):
+            mask = out[pos_name] == lane
+            out.loc[mask, f"{pos}_course_tide_interaction"] = out.loc[mask, f"lane{lane}_course_tide_interaction"]
+
     return out
 
 
@@ -399,6 +484,12 @@ def _add_motor_stats_block(df: pd.DataFrame, motor_stats: pd.DataFrame) -> pd.Da
 
     motor_stats が空(build_motor_point_in_time_stats.py未実行)の場合は
     全レーンNaN(学習時は0埋め)にフォールバックする。
+
+    2026-08-03バグ修正: 空フォールバック時の列名が`lane{n}_{suf}`になっており、
+    非空時の列名`lane{n}_motor_{suf}`と食い違っていたため、下のcombo側への
+    展開ループ(`lane{lane}_motor_{suf}`を参照)でKeyErrorになっていた
+    (motor_statsを渡さずに_train_one_venueを呼ぶsweep_racer_stats_weight.py
+    実行時に発覚)。
     """
     out = df.copy()
     out["date"] = out["date"].astype(str).str.zfill(8)
@@ -406,7 +497,7 @@ def _add_motor_stats_block(df: pd.DataFrame, motor_stats: pd.DataFrame) -> pd.Da
     if motor_stats is None or motor_stats.empty:
         for lane in range(1, 7):
             for suf in MOTOR_STATS_FEATURE_SUFFIXES:
-                out[f"lane{lane}_{suf}"] = np.nan
+                out[f"lane{lane}_motor_{suf}"] = np.nan
     else:
         for lane in range(1, 7):
             motor_col = f"lane{lane}_motor"
@@ -509,6 +600,8 @@ def _get_feature_cols(
     include_meeting_form_features: bool = True,
     include_wind_course_interaction_features: bool = False,
     include_st_std_feature: bool = False,
+    include_tide_features: bool = False,
+    include_wind_nonlinear_features: bool = False,
 ) -> List[str]:
     candidate_cols = [
         "combo_first_lane", "combo_second_lane", "combo_third_lane",
@@ -582,6 +675,22 @@ def _get_feature_cols(
             candidate_cols.append(f"{pos}_course_wind_interaction")
             candidate_cols.append(f"{pos}_course_wave_interaction")
 
+    if include_wind_nonlinear_features:
+        # 2026-08-10追加: 極端な風・波の影響を明示的に効かせるための2乗項。
+        candidate_cols.append("wind_speed_mps_sq")
+        candidate_cols.append("wave_cm_sq")
+
+    if include_tide_features:
+        # 2026-08-10追加: 潮位(生の水位・トレンド)+コース×潮位トレンドの交互作用。
+        # scripts/join_tide_features.py で列が結合されていない会場/venueでは
+        # 全行0のダミー列になる(_add_feature_block参照)。
+        candidate_cols.append("tide_level_cm")
+        candidate_cols.append("tide_trend_cmph")
+        for lane in range(1, 7):
+            candidate_cols.append(f"lane{lane}_course_tide_interaction")
+        for pos in ["first", "second", "third"]:
+            candidate_cols.append(f"{pos}_course_tide_interaction")
+
     return [c for c in candidate_cols if c in df.columns]
 
 
@@ -593,6 +702,8 @@ def _prepare_xy(
     include_meeting_form_features: bool = True,
     include_wind_course_interaction_features: bool = False,
     include_st_std_feature: bool = False,
+    include_tide_features: bool = False,
+    include_wind_nonlinear_features: bool = False,
 ) -> Tuple[pd.DataFrame, pd.Series, List[str]]:
     if "y" not in df.columns:
         raise ValueError("dataset must contain y column")
@@ -607,6 +718,8 @@ def _prepare_xy(
         include_meeting_form_features=include_meeting_form_features,
         include_wind_course_interaction_features=include_wind_course_interaction_features,
         include_st_std_feature=include_st_std_feature,
+        include_tide_features=include_tide_features,
+        include_wind_nonlinear_features=include_wind_nonlinear_features,
     )
     if not feature_cols:
         raise RuntimeError("no feature columns found")
@@ -707,6 +820,8 @@ def _train_one_venue(
     include_meeting_form_features: bool = True,
     include_wind_course_interaction_features: bool = False,
     include_st_std_feature: bool = False,
+    include_tide_features: bool = False,
+    include_wind_nonlinear_features: bool = False,
 ) -> None:
     venue = normalize_venue_name(venue)
     print("\n" + "=" * 80)
@@ -739,6 +854,8 @@ def _train_one_venue(
             include_meeting_form_features=include_meeting_form_features,
             include_wind_course_interaction_features=include_wind_course_interaction_features,
             include_st_std_feature=include_st_std_feature,
+            include_tide_features=include_tide_features,
+            include_wind_nonlinear_features=include_wind_nonlinear_features,
         )
         x_valid, y_valid, _ = _prepare_xy(
             valid_raw, with_racer_stats,
@@ -747,6 +864,8 @@ def _train_one_venue(
             include_meeting_form_features=include_meeting_form_features,
             include_wind_course_interaction_features=include_wind_course_interaction_features,
             include_st_std_feature=include_st_std_feature,
+            include_tide_features=include_tide_features,
+            include_wind_nonlinear_features=include_wind_nonlinear_features,
         )
 
         pos_count = int((y_train == 1).sum() + (y_valid == 1).sum())
@@ -829,6 +948,10 @@ def _train_one_venue(
                     "course_wind_interaction" in c for c in feature_cols
                 ),
                 "with_st_std_feature": any("st_std_prior" in c for c in feature_cols),
+                "with_tide_features": any("tide_" in c for c in feature_cols),
+                "with_wind_nonlinear_features": any(
+                    c in ("wind_speed_mps_sq", "wave_cm_sq") for c in feature_cols
+                ),
                 "model_suffix": model_suffix,
                 "feature_weight_targets": feature_weight_targets if feature_weights is not None else None,
                 "feature_weight_multiplier": feature_weight_multiplier if feature_weights is not None else 1.0,
@@ -926,6 +1049,19 @@ def main() -> None:
              "他の新機能と同様デフォルトでは無効(ROIホールドアウト検証未実施のため)。",
     )
     parser.add_argument(
+        "--enable_tide_features", action="store_true",
+        help="潮位(tide_level_cm・tide_trend_cmph)+コース×潮位トレンドの交互作用"
+             "(2026-08-10追加)を学習に追加する。事前に scripts/join_tide_features.py で"
+             "trifecta_train.csv(または会場別分割ファイル)にこれらの列を結合しておく必要がある。"
+             "他の新機能と同様デフォルトでは無効(ROIホールドアウト検証未実施のため)。",
+    )
+    parser.add_argument(
+        "--enable_wind_nonlinear_features", action="store_true",
+        help="風速・波高の2乗項(wind_speed_mps_sq・wave_cm_sq、2026-08-10追加。"
+             "「極端な風の影響は直線的でなく指数的」というユーザーの指摘を受けた特徴量)を"
+             "学習に追加する。他の新機能と同様デフォルトでは無効。",
+    )
+    parser.add_argument(
         "--use_tuned_depth", action="store_true",
         help="scripts/sweep_hyperparameters.py --all の検証(2026-07-30)で改善が確認できた"
              "13会場(VENUE_DEPTH_OVERRIDES参照)だけdepth=6を使う。対象外の会場は"
@@ -979,6 +1115,8 @@ def main() -> None:
                     "include_meeting_form_features": not args.disable_meeting_form_features,
                     "include_wind_course_interaction_features": args.enable_wind_course_interaction_features,
                     "include_st_std_feature": args.enable_st_std_feature,
+                    "include_tide_features": args.enable_tide_features,
+                    "include_wind_nonlinear_features": args.enable_wind_nonlinear_features,
                 }
 
             _train_one_venue(

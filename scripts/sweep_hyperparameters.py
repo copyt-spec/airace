@@ -127,6 +127,12 @@ def _load_baseline_feature_flags(venue: str) -> dict:
         "include_meeting_form_features": True,
         "include_wind_course_interaction_features": False,
         "include_st_std_feature": False,
+        # 2026-08-10追加: 潮位特徴量・風速非線形項も他のフラグと同様に本番
+        # meta.jsonから引き継ぐ。これを追加し忘れると[[boat_ai_feature_flag_reset_bug]]
+        # と同じパターンで、widehold再構築時に全会場が「無効」にリセットされてしまう
+        # (_train_one_venueの関数デフォルトがFalseのため)。
+        "include_tide_features": False,
+        "include_wind_nonlinear_features": False,
     }
     if not meta_path.exists():
         return defaults
@@ -148,6 +154,10 @@ def _load_baseline_feature_flags(venue: str) -> dict:
             "with_wind_course_interaction_features", defaults["include_wind_course_interaction_features"]
         ),
         "include_st_std_feature": _flag("with_st_std_feature", defaults["include_st_std_feature"]),
+        "include_tide_features": _flag("with_tide_features", defaults["include_tide_features"]),
+        "include_wind_nonlinear_features": _flag(
+            "with_wind_nonlinear_features", defaults["include_wind_nonlinear_features"]
+        ),
     }
 
 

@@ -176,15 +176,13 @@ def _fill_from_dom(soup: BeautifulSoup, result: Dict[Any, Any]) -> None:
         icon = wind_block.select_one("p.weather1_bodyUnitImage")
         if icon:
             classes = icon.get("class", [])
+            # 2026-08-11修正: 実際は22.5度刻み16方位(is-wind1〜16)。
+            # 詳細はengine/beforeinfo_fetcher_venue.pyの同箇所コメント参照。
             wind_map = {
-                "1": "北",
-                "2": "北東",
-                "3": "東",
-                "4": "南東",
-                "5": "南",
-                "6": "南西",
-                "7": "西",
-                "8": "北西",
+                "1": "北", "2": "北北東", "3": "北東", "4": "東北東",
+                "5": "東", "6": "東南東", "7": "南東", "8": "南南東",
+                "9": "南", "10": "南南西", "11": "南西", "12": "西南西",
+                "13": "西", "14": "西北西", "15": "北西", "16": "北北西",
             }
             for c in classes:
                 if c.startswith("is-wind"):

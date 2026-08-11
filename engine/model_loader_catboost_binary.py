@@ -681,6 +681,40 @@ class BinaryCatBoostVenueModel:
                 out.loc[mask, f"{pos}_course_wind_interaction"] = out.loc[mask, f"lane{lane}_course_wind_interaction"]
                 out.loc[mask, f"{pos}_course_wave_interaction"] = out.loc[mask, f"lane{lane}_course_wave_interaction"]
 
+        # 2026-08-10追加: 風速・波高の非線形(2乗)項。学習側
+        # (scripts/train_binary_catboost_per_venue_with_racer_stats.py)の
+        # _add_feature_block()と同じロジック。実際に使うかはロード済みモデルの
+        # meta.jsonのfeature_cols(include_wind_nonlinear_features)に委ねる。
+        out["wind_speed_mps_sq"] = (out["wind_speed_mps"].astype("float32") ** 2).astype("float32")
+        out["wave_cm_sq"] = (out["wave_cm"].astype("float32") ** 2).astype("float32")
+
+        # 2026-08-10追加: 潮位特徴量(tide_level_cm・tide_trend_cmph)。
+        # ライブ推論側ではapp/controller.pyの_build_df120_from_ai_entries()が
+        # engine/tide_fetcher.py + engine/venue_race_schedule.py で計算した値を
+        # df120にあらかじめ入れてくる想定。無ければ0埋め(学習側と同じ設計)。
+        if "tide_level_cm" not in out.columns:
+            out["tide_level_cm"] = 0.0
+        if "tide_trend_cmph" not in out.columns:
+            out["tide_trend_cmph"] = 0.0
+        out["tide_level_cm"] = pd.to_numeric(out["tide_level_cm"], errors="coerce").fillna(0).astype("float32")
+        out["tide_trend_cmph"] = pd.to_numeric(out["tide_trend_cmph"], errors="coerce").fillna(0).astype("float32")
+
+        for lane in range(1, 7):
+            course_col = f"lane{lane}_course"
+            out[f"lane{lane}_course_tide_interaction"] = (
+                out[course_col].astype("float32") * out["tide_trend_cmph"]
+            ).astype("float32")
+
+        for pos, pos_name in [
+            ("first", "combo_first_lane"),
+            ("second", "combo_second_lane"),
+            ("third", "combo_third_lane"),
+        ]:
+            out[f"{pos}_course_tide_interaction"] = 0.0
+            for lane in range(1, 7):
+                mask = out[pos_name] == lane
+                out.loc[mask, f"{pos}_course_tide_interaction"] = out.loc[mask, f"lane{lane}_course_tide_interaction"]
+
         return out
 
     def _add_racer_stats_block_live(self, df: pd.DataFrame) -> pd.DataFrame:
